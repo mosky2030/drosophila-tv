@@ -72,10 +72,10 @@ object Diagnostics {
 
     fun report(context: Context): String = buildString {
         val pm = context.packageManager
-        appendLine("### Aerial diagnostics")
+        appendLine("### Drosophila diagnostics")
         appendLine()
         appendLine("```")
-        appendLine("Aerial      ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) ${BuildConfig.FLAVOR}, package ${context.packageName}, installer ${installer(context) ?: "-"}")
+        appendLine("Drosophila      ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) ${BuildConfig.FLAVOR}, package ${context.packageName}, installer ${installer(context) ?: "-"}")
         appendLine("Device      ${Build.MANUFACTURER} / ${Build.BRAND} / ${Build.MODEL} (device ${Build.DEVICE}, product ${Build.PRODUCT}, hardware ${Build.HARDWARE}, board ${Build.BOARD})")
         appendLine("Android     ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})" + if (Build.VERSION.SDK_INT >= 23) ", patch ${Build.VERSION.SECURITY_PATCH}" else "")
         appendLine("Build       ${Build.DISPLAY}")
@@ -118,8 +118,8 @@ object Diagnostics {
         appendLine("Effects     ${AerialSettings.effects.key}, lite=${AerialSettings.lite}; ${DeviceClass.describe(context)}")
         appendLine("Compiled    ${compiled(context)}; self compile ${app.orchard.tv.update.SelfCompile.diagnostics(context)}")
         appendLine("Frames      ${FrameStats.summary()}")
-        appendLine("Settings    focus=${AerialSettings.focusStyle.key} one_row=${AerialSettings.oneRowHome} columns=${AerialSettings.homeColumns} peek=${AerialSettings.peekNextRow} names=${AerialSettings.showAllNames} plate=${AerialSettings.homePlate} boot_source=${AerialSettings.bootSource != null} boot_app=${AerialSettings.bootApp}")
-        appendLine("            clock_hours=${AerialSettings.clockHours.key} home_locked=${AerialSettings.homeLocked} photo_minutes=${AerialSettings.photoMinutes} cec_switch=${AerialSettings.cecSwitch} hidden_sources=${AerialSettings.hiddenSources.size} volume_fixed=${OutputDevice.volumeFixed(context)} playback_device=${OutputDevice.isPlaybackDevice()}")
+        appendLine("Settings    look=${AerialSettings.iconLook.key} one_row=${AerialSettings.oneRowHome} columns=${AerialSettings.homeColumns} peek=${AerialSettings.peekNextRow} names=${AerialSettings.showAllNames} plate=${AerialSettings.homePlate} boot_source=${AerialSettings.bootSource != null} boot_app=${AerialSettings.bootApp}")
+        appendLine("            clock_place=${AerialSettings.clockPlace.key} clock_hours=${AerialSettings.clockHours.key} home_locked=${AerialSettings.homeLocked} photo_minutes=${AerialSettings.photoMinutes} cec_switch=${AerialSettings.cecSwitch} hidden_sources=${AerialSettings.hiddenSources.size} volume_fixed=${OutputDevice.volumeFixed(context)} playback_device=${OutputDevice.isPlaybackDevice()}")
         runCatching { app.orchard.tv.wallpaper.AerialStream.usage(context) }.getOrNull()?.let { (used, limit) ->
             appendLine("Aerials     quality=${AerialSettings.aerialQuality.key} films=${app.orchard.tv.wallpaper.AerialSet.films(context).joinToString(",") { it.id.take(8) }} cache=${used / 1_048_576}/${limit / 1_048_576} MB")
         }
@@ -136,7 +136,7 @@ object Diagnostics {
         appendLine()
         appendLine("**Brightness**")
         appendLine("```")
-        appendLine("Aerial can set it: ${Brightness.level(context) != null}")
+        appendLine("Drosophila can set it: ${Brightness.level(context) != null}")
         appendLine("  global picture_backlight=${global(context, "picture_backlight")}  system screen_brightness=${system(context, Settings.System.SCREEN_BRIGHTNESS)} mode=${system(context, Settings.System.SCREEN_BRIGHTNESS_MODE)}")
         appendLine("```")
 

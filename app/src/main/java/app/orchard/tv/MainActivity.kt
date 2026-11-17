@@ -51,6 +51,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.lifecycleScope
 import app.orchard.tv.apps.AppEntry
+import app.orchard.tv.apps.PuzzleTile
 import app.orchard.tv.apps.CustomIcons
 import app.orchard.tv.apps.IconLibrary
 import app.orchard.tv.apps.AppNames
@@ -89,6 +90,7 @@ import app.orchard.tv.system.MissingClipboard
 import app.orchard.tv.system.Sounds
 import app.orchard.tv.system.NetKind
 import app.orchard.tv.system.SystemProbe
+import app.orchard.tv.system.Sleep
 import app.orchard.tv.system.HisenseSources
 import app.orchard.tv.system.KonkaSources
 import app.orchard.tv.system.HomeReopen
@@ -409,6 +411,13 @@ class MainActivity : ComponentActivity() {
     private val screenOnReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.action == Intent.ACTION_SCREEN_OFF) { BootOpen.noteScreenOff(context); return }
+            // A copy of an older Aerial may have shortened the screen timeout through Sleep;
+            // put the owner's own timeout back before anything else, so the screen is not asked
+            // to turn off again a moment after it came on. Then the hold on the screen.
+            Sleep.restore(context)
+            if (screenNeverOff() && Wallpapers.screensaver != ScreensaverMode.System &&
+                window.attributes.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON == 0
+            ) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             idleHandler.postDelayed({
                 if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) openBootSource("screen on")
             }, 1500)
@@ -710,7 +719,9 @@ class MainActivity : ComponentActivity() {
         // between them; the dream would be a new player in a new window, and showed black even in
         // 4K (TCL MT5879). Not with Dolby Vision chosen by hand, which the wallpaper does not play.
         val carry = saverCarriesWallpaper(this)
-        if (!carry && !dreamFails(this) && SystemScreensaver.isAerials(this)) {
+        // The puzzle is a WebView, which needs an Activity's window; the dream is a DreamService
+        // and has none, so the puzzle is always shown here on Home instead of being handed over.
+        if (!carry && Wallpapers.screensaver != ScreensaverMode.Puzzle && !dreamFails(this) && SystemScreensaver.isAerials(this)) {
             // The dream's film needs the decoder the wallpaper's holds: TCL MT5879 failed Dolby
             // Vision beside it and the dream fell back to 4K HEVC.
             LiveFilm.onHome?.letDecoderGo()
@@ -782,7 +793,7 @@ class MainActivity : ComponentActivity() {
         // taking focus (TCL MT5879: a press 18 ms after onPause, focus gone 400 ms later), and a
         // timer set then would start the screensaver over the app's video (issue #974).
         if (!vm.resumed) return
-        if (AerialSettings.screensaverMinutes != AerialSettings.NEVER) {
+        if (AerialSettings.screensaverSeconds != AerialSettings.NEVER) {
             val idle = idleBeforeScreensaver()
             idleHandler.postDelayed(showScreensaver, idle)
             if (idle > SAVER_AHEAD_MS) idleHandler.postDelayed(prepareScreensaver, idle - SAVER_AHEAD_MS)
@@ -813,7 +824,7 @@ class MainActivity : ComponentActivity() {
         runCatching { Settings.System.getLong(contentResolver, Settings.System.SCREEN_OFF_TIMEOUT) }.getOrDefault(0L) >= 24 * 60 * 60 * 1000L
 
     private fun idleBeforeScreensaver(): Long {
-        val chosen = AerialSettings.screensaverMinutes * 60_000L
+        val chosen = AerialSettings.screensaverSeconds * 1_000L
         // Where Aerial's dream is the TV's screensaver, the TV starts it on its own after
         // screen_off_timeout (TCL MT5879: 2 minutes); Home starts its own first, so that the
         // aerial wallpaper's film can carry on (startScreensaver).
@@ -839,7 +850,7 @@ class MainActivity : ComponentActivity() {
     private fun holdsOffTheDream(): Boolean {
         if (firmwareScreensaverDelay() != null) return false
         val dream = dreamDelay() ?: return false
-        return AerialSettings.screensaverMinutes * 60_000L > dream - 15_000L
+        return AerialSettings.screensaverSeconds * 1_000L > dream - 15_000L
     }
 
     private fun hideScreensaver() {
@@ -1098,6 +1109,11 @@ class MainActivity : ComponentActivity() {
 
     /** Opens an app, growing it out of its tile. */
     private fun launch(app: AppEntry, bounds: Rect?) {
+        // Aerial's own puzzle game opens in its WebView shell.
+        if (app.key == PuzzleTile.KEY) {
+            open(Intent(this, PuzzleActivity::class.java))
+            return
+        }
         // Kids and Elders mode shows only its own tiles, and none while locked; this is the last word.
         if (Restricted.active && (app.key !in Restricted.allowed || Restricted.lock != null)) {
             DiagLog.i("kids: ${app.key} not opened")

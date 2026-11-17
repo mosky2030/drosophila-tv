@@ -27,7 +27,6 @@ import app.orchard.tv.guard.KidsWatch
 import android.os.SystemClock
 import app.orchard.tv.system.Diagnostics
 import app.orchard.tv.system.currentNetwork
-import app.orchard.tv.settings.FocusStyle
 import app.orchard.tv.weather.Weather
 import androidx.core.graphics.createBitmap
 import com.google.zxing.BarcodeFormat
@@ -113,11 +112,6 @@ class PhoneServer private constructor(private val context: Context, private val 
                         else -> false
                     }
                     json(state().put("saved", known))
-                }
-                session.method == Method.POST && path == "/api/focus" -> {
-                    val style = FocusStyle.of(form(session)["style"])
-                    onMain { AerialSettings.chooseFocusStyle(style) }
-                    json(state())
                 }
                 session.method == Method.POST && path == "/api/delete" -> {
                     val id = form(session)["id"].orEmpty()
@@ -242,7 +236,6 @@ class PhoneServer private constructor(private val context: Context, private val 
                 ScreensaverVideos.all(context).forEach { put(JSONObject().put("id", it.id).put("name", it.name)) }
             })
             .put("videoRoom", ScreensaverVideos.room(context))
-            .put("focusStyle", AerialSettings.focusStyle.key)
             .put("kids", kidsState())
             .put("wallpaperAlwaysMoves", AerialSettings.wallpaperAlwaysMoves)
             .put("showWeather", AerialSettings.showWeather)

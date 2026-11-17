@@ -10,6 +10,7 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.toArgb
 import app.orchard.tv.BuildConfig
+import app.orchard.tv.settings.AerialSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -39,11 +40,23 @@ object TileDiskCache {
         dir = File(context.cacheDir, "tiles").apply { mkdirs() }
     }
 
-    /** Bumped when tiles are drawn differently, so a build with the same version code redraws them. */
-    private const val ART = 4
+    /** Bumped when tiles are drawn differently, so a build with the same version code redraws them.
+     *  5: banner-shaped icons fill the tile whole; gradient plates carry across (电视管家).
+     *  6: banner bottom label strips cropped; original mode draws square icons whole (TVBox).
+     *  7: the 16:9 tile is Aerial's plate/logo again; a square slot keeps a separate 1:1 artwork;
+     *     the bottom strip is measured on the icon's own pixels, past its border row.
+     *  8: no logo extraction in either look: the whole square icon is centred, at its own aspect,
+     *     on the icon's own colors or on dopamine's plate.
+     *  9: a firmware icon declared as a wide banner uses the package's square ic_launcher when it
+     *     has one — withdrawn, it picked an old green robot instead of the TV's blue system icon.
+     *  10: back to the declared icon, centred whole; the right system icons are to be supplied
+     *     separately once the TV's own resources are read.
+     *  11: in the original look a dark logo on transparency (the grey TVBox) sits on soft pale
+     *     yellow instead of black; dopamine keeps its random bright plate. */
+    private const val ART = 13
 
     fun key(stamp: Long): String =
-        "$stamp|${TileArtFactory.W}|${TileArtFactory.unified}|${Locale.getDefault().toLanguageTag()}|${BuildConfig.VERSION_CODE}|$ART"
+        "$stamp|${TileArtFactory.W}|${AerialSettings.iconLook.key}|${Locale.getDefault().toLanguageTag()}|${BuildConfig.VERSION_CODE}|$ART"
 
     private fun file(pkg: String) = File(dir, "$pkg.tile")
 
@@ -66,7 +79,8 @@ object TileDiskCache {
                 val back = image() ?: return null
                 val fore = image()
                 val backdrop = image() ?: return null
-                label to TileArt(back.asImageBitmap(), fore?.asImageBitmap(), foreAt, tint, backdrop.asImageBitmap())
+                val square = image()
+                label to TileArt(back.asImageBitmap(), fore?.asImageBitmap(), foreAt, tint, backdrop.asImageBitmap(), square = square?.asImageBitmap())
             }
         }.onFailure { Log.w(TAG, "could not read the kept tile of $pkg", it) }.getOrNull()
     }
@@ -94,7 +108,7 @@ object TileDiskCache {
                     out.writeUTF(label)
                     out.writeInt(art.tint.toArgb())
                     art.foreAt.run { out.writeFloat(left); out.writeFloat(top); out.writeFloat(right); out.writeFloat(bottom) }
-                    for (image in listOf(art.back, art.fore, art.backdrop)) {
+                    for (image in listOf(art.back, art.fore, art.backdrop, art.square)) {
                         if (image == null) {
                             out.writeInt(0)
                             continue

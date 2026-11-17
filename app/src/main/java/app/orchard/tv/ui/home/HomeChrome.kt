@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.Build
 import android.text.format.DateFormat
 import android.graphics.PorterDuff
 import android.graphics.Matrix
@@ -26,6 +27,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -42,6 +44,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
@@ -61,9 +65,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.graphics.FilterQuality
@@ -87,9 +96,11 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import app.orchard.tv.R
 import app.orchard.tv.settings.AerialSettings
+import app.orchard.tv.settings.ClockPlace
 import app.orchard.tv.settings.ClockHours
+import app.orchard.tv.settings.IconStyle
 import app.orchard.tv.wallpaper.Images
-import app.orchard.tv.system.NetKind
+
 import app.orchard.tv.system.NetworkStatus
 import app.orchard.tv.ui.components.Dissolve
 import app.orchard.tv.ui.components.Pressable
@@ -284,7 +295,9 @@ fun HomeBackground(
             // ([filmGlass], every 15 s), so it is not the colours of a shot long gone.
             val still = Wallpapers.filmGlassless && Wallpapers.moves() && (frosted ?: backdrop) != null
             val film = filmGlass.takeUnless { Wallpapers.filmGlassless }
-            Plate(if (still) filmGlass ?: frosted ?: backdrop else frosted ?: backdrop, film, film != null, Wallpapers.filmGlassless, plate, scroll, collapse, cover, filmStopped, toSaver, lift, still)
+            // The original icon style sits on a lighter plate, so the picture shows through the row.
+            val stillAlpha = if (AerialSettings.iconStyle == IconStyle.Original) 0.62f else 1f
+            Plate(if (still) filmGlass ?: frosted ?: backdrop else frosted ?: backdrop, film, film != null, Wallpapers.filmGlassless, plate, scroll, collapse, cover, filmStopped, toSaver, lift, still, stillAlpha)
         }
     }
 }
@@ -383,7 +396,7 @@ private fun Pictures(
  * moves or a new frame fades in, every [GLASS_EVERY_MS]: the film plays with Compose all but still.
  */
 @Composable
-private fun Plate(glass: ImageBitmap?, film: ImageBitmap?, filmPlate: Boolean, deepSmoke: Boolean, plate: Rect?, scroll: () -> Float, collapse: Float, cover: () -> Float, filmStopped: () -> Float, toSaver: () -> Float, lift: () -> Float, stillOverFilm: Boolean = false) {
+private fun Plate(glass: ImageBitmap?, film: ImageBitmap?, filmPlate: Boolean, deepSmoke: Boolean, plate: Rect?, scroll: () -> Float, collapse: Float, cover: () -> Float, filmStopped: () -> Float, toSaver: () -> Float, lift: () -> Float, stillOverFilm: Boolean = false, stillAlpha: Float = 1f) {
     var shown by remember { mutableStateOf(glass) }
     var under by remember { mutableStateOf<ImageBitmap?>(null) }
     val swap = remember { Animatable(1f) }
@@ -495,8 +508,10 @@ private fun Plate(glass: ImageBitmap?, film: ImageBitmap?, filmPlate: Boolean, d
         val r = plate.translate(0f, -scroll() - lift()).inflate(grow)
         val t = swap.value
         val below = bottom.takeIf { under != null }
-        if (t < 1f) below?.let { drawBaked(it, r, alpha) }
-        top?.let { drawBaked(it, r, if (below != null) alpha * t else alpha) }
+        // [stillAlpha] thins the glass over a picture (the original icon style asks for a lighter
+        // plate). Only the resting plate takes it: a film's plate and its edge keep theirs.
+        if (t < 1f) below?.let { drawBaked(it, r, alpha * stillAlpha) }
+        top?.let { drawBaked(it, r, (if (below != null) alpha * t else alpha) * stillAlpha) }
     }
 }
 
@@ -622,8 +637,9 @@ private fun darkened(src: ImageBitmap, alpha: Float): ImageBitmap {
 }
 
 /**
- * The large clock, as on the lock screen: the date (in Chinese, with the lunar one) over the time
- * in heavy digits, and under it the weather, the city it is for (issue #59) and today's high and
+ * The large clock, as on the lock screen: the date over the time in heavy digits — with the
+ * Chinese calendar's date and the solar term after it, where Personalize asks for either — and
+ * under it the weather, the city it is for (issue #59) and today's high and
  * low. Left or right, the three lines share one edge, the tiles' edge. Each line's box is its
  * capitals' height ([capBox]), so the gaps between them are the gaps a reader sees. A soft shadow
  * keeps them readable on bright photos. The clock screensaver shows the same.
@@ -632,7 +648,7 @@ private fun darkened(src: ImageBitmap, alpha: Float): ImageBitmap {
 fun ShelfClock(
     now: LocalDateTime,
     modifier: Modifier = Modifier,
-    alignEnd: Boolean = false,
+    place: ClockPlace = ClockPlace.Left,
     /** How far the time has moved to the screensaver's place ([toSaverClock]); the date and weather go. */
     toSaver: () -> Float = { 0f },
     /** The screensaver is up over Home, carrying this clock: it wanders as the screensaver's does. */
@@ -645,6 +661,10 @@ fun ShelfClock(
     // The Chinese calendar's date and the weather's details in white too, only lighter in weight:
     // dimmed, they faded into an unshaded film (the owner, Xiaomi MiTV-MFTR0).
     val second = SpanStyle(fontWeight = FontWeight.W500)
+    // The Chinese date and the term step down from the date they follow, so the line still reads
+    // as the date first and them after it (the owner: 字体小一点). 12sp under the date's 19, on the
+    // date's baseline: the two bottoms sit on one line, as Chinese set beside larger Chinese does.
+    val small = SpanStyle(fontWeight = FontWeight.W500, fontSize = 12.sp)
     // Gone in the first 400 ms, while the time has barely set off (its 2 s ease-in-out). Fading
     // along its progress (1.52), they were still there as the time rose through the date, and over
     // a moving film, at 8-10 frames a second on Xiaomi MiTV-MFTR0, they read as cut away in steps.
@@ -662,41 +682,205 @@ fun ShelfClock(
         // as the fade ended (the owner, Xiaomi MiTV-MFTR0).
         compositingStrategy = CompositingStrategy.ModulateAlpha
     }
-    Column(modifier, horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start) {
-        // On a TV set to Chinese, the Chinese calendar's date follows, as on the iPhone's lock screen.
-        val lunar = if (Locale.getDefault().language == "zh") Lunar.text(now.toLocalDate()) else null
+    Column(
+        modifier,
+        horizontalAlignment = when (place) {
+            ClockPlace.Left -> Alignment.Start
+            ClockPlace.Center -> Alignment.CenterHorizontally
+            ClockPlace.Right -> Alignment.End
+        },
+    ) {
+        // The Chinese calendar's date and the solar term are each only there when Personalize
+        // asks for them, both off as they come. The Chinese date is only in Chinese: it is that
+        // calendar's own wording, and the phone's lock screen drops it in other languages too.
+        val date = now.toLocalDate()
+        val lunar = if (AerialSettings.clockLunar && Locale.getDefault().language == "zh") Lunar.text(date) else null
+        val term = if (AerialSettings.clockTerm) SolarTerm.of(date) else null
         BasicText(
             buildAnnotatedString {
                 append(dateText(now))
-                if (lunar != null) withStyle(second) { append("  $lunar") }
+                if (lunar != null) withStyle(small) { append("  $lunar") }
+                if (term != null) withStyle(small) { append(if (lunar != null) " · $term" else "  $term") }
             },
             style = Type.ClockDate.copy(shadow = shadow),
             modifier = aside.capBox(Type.ClockDate.fontSize),
         )
+        // 超大 ("Extra Large"): the time a size up; the date and the weather keep theirs, so the
+        // three lines still read as a clock and its footnotes. The morph to the screensaver's
+        // clock scales from whatever size this is, so it hands off from either size.
+        val timeSize = if (AerialSettings.clockXL) 148.sp else Type.Clock.fontSize
         BasicText(
             timeText(now),
-            style = Type.Clock.copy(shadow = shadow),
+            style = Type.Clock.copy(shadow = shadow, fontSize = timeSize),
             modifier = Modifier.padding(top = 16.dp)
-                .toSaverClock(toSaver, Type.Clock.fontSize, 0.dp, drift)
-                .capBox(Type.Clock.fontSize),
+                .toSaverClock(toSaver, timeSize, 0.dp, drift)
+                .capBox(timeSize),
         )
         Weather.now?.takeIf { AerialSettings.showWeather }?.let { w ->
             val place = Weather.place?.takeIf { it.length <= 12 }
             val range = if (w.high != null && w.low != null) stringResource(R.string.weather_high_low, w.high, w.low) else null
             val detail = listOfNotNull(place, stringResource(conditionName(w.kind)), range).joinToString(" · ")
-            Row(aside.padding(top = 18.dp).capBox(Type.ClockDetail.fontSize), verticalAlignment = Alignment.CenterVertically) {
-                GlyphIcon(glyphFor(w), Color.White, 18.dp, Modifier.padding(end = 7.dp))
+            // The same 12sp as the Chinese date under the date, and its icon brought down with it:
+            // the two lines under the clock are its footnotes, not a second reading (the owner).
+            // Under the extra-large time they grow with it (the owner): 12sp beside 148sp read as
+            // a caption lost under the clock rather than a line of it.
+            val detailSize = if (AerialSettings.clockXL) 17.sp else 12.sp
+            val detailIcon = if (AerialSettings.clockXL) 19.dp else 14.dp
+            Row(aside.padding(top = 16.dp).capBox(detailSize), verticalAlignment = Alignment.CenterVertically) {
+                GlyphIcon(glyphFor(w), Color.White, detailIcon, Modifier.padding(end = 6.dp))
                 BasicText(
                     buildAnnotatedString {
                         append(stringResource(R.string.weather_temperature, w.celsius))
                         withStyle(second) { append("  $detail") }
                     },
-                    style = Type.ClockDetail.copy(shadow = shadow),
+                    style = Type.ClockDetail.copy(shadow = shadow, fontSize = detailSize),
                 )
             }
         }
     }
 }
+
+/**
+ * The full-screen clock ("满屏"): the time as wide as the room will hold it, the date over it and
+ * the weather under it, the whole block centred over the icons. At half strength (the owner's 50),
+ * so the wallpaper reads through the biggest type on the screen.
+ *
+ * [topRowY] is the top of the icon row. The block's height is worked out from the lines' own cap
+ * heights before it is placed — the line boxes of types this size reach far past the digits — so
+ * its foot keeps [FullClockGap] clear of the icons and the block climbs into whatever room is
+ * left above, which under digits this wide is only just enough (the owner: 往上一点).
+ */
+@Composable
+fun FullClock(now: LocalDateTime, topRowY: Dp, modifier: Modifier = Modifier) {
+    val density = LocalDensity.current
+    // The date and the weather are ShelfClock's footnotes, a size up: beside digits the width of
+    // the screen, 19sp of date would read as dust on the wallpaper.
+    val dateSize = 26.sp
+    val detailSize = 21.sp
+    val dateInk = with(density) { dateSize.toDp() } * CAP_HEIGHT
+    val detailInk = with(density) { detailSize.toDp() } * CAP_HEIGHT
+    val weather = Weather.now?.takeIf { AerialSettings.showWeather }
+    // TopStart, not TopCentre: the block is placed by the ink centreing below, and a content
+    // alignment of its own would centre it a second time — the two stacked and shoved the time
+    // half a margin to the right (the owner's screenshot).
+    BoxWithConstraints(modifier, contentAlignment = Alignment.TopStart) {
+        // "21:13" is about 2.115 em at the display cut and "12:46" a hair wider, so the size
+        // comes from the width it has to fill (the owner found 1/2.55 too small: the time sat
+        // with a wide, empty right side and read as shoved left) — then checked against the ink
+        // the digits really make. A set's own font scale can widen them past what the divisor
+        // assumed, and the MiTV4 let the last minute digit run off the screen: "12:4" on it, the
+        // 5 gone (2026-11-16). Whatever the system does to the text, five digits end inside.
+        val timeTextNow = timeText(now)
+        val measurer = rememberTextMeasurer()
+        val fitted = remember(timeTextNow, maxWidth, density) {
+            var s = maxWidth.value / 2.4f
+            var layout = measurer.measure(timeTextNow, Type.Clock.copy(fontSize = s.sp))
+            val room = with(density) { maxWidth.toPx() } * 0.97f
+            fun ink(l: TextLayoutResult) =
+                l.getBoundingBox(l.layoutInput.text.length - 1).right - l.getBoundingBox(0).left
+            val w = ink(layout)
+            if (w > room) {
+                s *= room / w
+                layout = measurer.measure(timeTextNow, Type.Clock.copy(fontSize = s.sp))
+            }
+            s to layout
+        }
+        val size = fitted.first.sp
+        // The time is what the eye centres on; the date and the weather hang off ITS left edge,
+        // not the screen's (the owner: 「和中间的时间左对齐」). So the digits are measured first
+        // and the block is placed at half the room they leave — the block moves with the time's
+        // own width, which barely changes (five glyphs at almost every hour of the day).
+        val timeStyle = Type.Clock.copy(fontSize = size)
+        val timeLayout = fitted.second
+        // Centred on the digits' INK, not on their advance: the last digit's right side bearing
+        // left a wide, empty margin at the right, and the whole time read as shoved over (the
+        // owner's screenshot). The ink runs from the first digit's left edge to the last digit's
+        // right edge; the block is set so that run sits in the middle of the room.
+        //
+        // No floor on that offset. Flooring it at zero shoved the line right whenever the first
+        // digit's left bearing is wider than the room left of the centred ink — a "7" at this
+        // size — and the last minute digit ran off the screen: "7:38" read as "7:3", until the
+        // minute turned and a narrow digit stopped the shoving (the owner, 2026-11-18:
+        // 「7:38 没有显示全」 then 「又可以了」). A negative offset only parks the box's empty
+        // leading space off-screen; the ink itself stays centred and inside, and the fit above
+        // has already capped the ink at 97% of the room.
+        val bbLeft = timeLayout.getBoundingBox(0).left
+        val bbRight = timeLayout.getBoundingBox(timeTextNow.length - 1).right
+        val inkWidth = with(density) { (bbRight - bbLeft).toDp() }
+        val inkOffset = with(density) { bbLeft.toDp() }
+        val left = (maxWidth - inkWidth) / 2f - inkOffset
+        val ink = with(density) { size.toDp() } * CAP_HEIGHT
+        // The room between the three lines, and the block's whole height at that: the foot is
+        // what has to clear the icons, so it is placed from that end rather than from the top.
+        val between = 14.dp
+        val total = dateInk + between + ink + if (weather != null) between + detailInk else 0.dp
+        val top = (topRowY - total - FullClockGap).coerceAtLeast(6.dp)
+        Column(
+            modifier = Modifier.offset { IntOffset(left.roundToPx(), top.roundToPx()) },
+            // The date and the weather start where the digits start.
+            horizontalAlignment = Alignment.Start,
+        ) {
+            val date = now.toLocalDate()
+            val lunar = if (AerialSettings.clockLunar && Locale.getDefault().language == "zh") Lunar.text(date) else null
+            val term = if (AerialSettings.clockTerm) SolarTerm.of(date) else null
+            val small = SpanStyle(fontWeight = FontWeight.W500, fontSize = (dateSize.value * 0.62f).sp)
+            BasicText(
+                buildAnnotatedString {
+                    append(dateText(now))
+                    if (lunar != null) withStyle(small) { append("  $lunar") }
+                    if (term != null) withStyle(small) { append(if (lunar != null) " · $term" else "  $term") }
+                },
+                style = Type.ClockDate.copy(shadow = FullShadow, fontSize = dateSize),
+                modifier = Modifier.capBox(dateSize),
+            )
+            BasicText(
+                timeTextNow,
+                style = Type.Clock.copy(shadow = FullShadow, fontSize = size),
+                modifier = Modifier.padding(top = between).capBox(size),
+            )
+            weather?.let { w ->
+                val place = Weather.place?.takeIf { it.length <= 12 }
+                val range = if (w.high != null && w.low != null) stringResource(R.string.weather_high_low, w.high, w.low) else null
+                val detail = listOfNotNull(place, stringResource(conditionName(w.kind)), range).joinToString(" · ")
+                Row(
+                    Modifier.padding(top = between).capBox(detailSize),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    GlyphIcon(glyphFor(w), Color.White, (detailSize.value * 1.05f).dp, Modifier.padding(end = 8.dp))
+                    BasicText(
+                        buildAnnotatedString {
+                            append(stringResource(R.string.weather_temperature, w.celsius))
+                            withStyle(SpanStyle(fontWeight = FontWeight.W500, fontSize = (detailSize.value * 0.92f).sp)) {
+                                append("  $detail")
+                            }
+                        },
+                        style = Type.ClockDetail.copy(shadow = FullShadow, fontSize = detailSize),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Room kept between the full-screen clock's foot and the icons: the owner's "不能和图标有接触".
+ *  A dock's focused icon's name hangs under the clock's foot too, so the room clears that as well. */
+private val FullClockGap = 40.dp
+
+/**
+ * One soft shade under the full-screen digits, so they read on a bright sky at half strength —
+ * none at all below Android 7.
+ *
+ * A shadow this wide under text this big is not free on the old renderers: Xiaomi's hwui on
+ * Android 6 (the owner's MiTV4, 2026-11-16) draws it through RenderScript, and the blur crashed
+ * the render thread outright — `SIGSEGV` in `ScriptIntrinsicBlur::setInput`, in the frame the
+ * full-screen clock first appeared. The setting is kept, so the app died again on every start
+ * until it was uninstalled: a clock that needs no shade beats a desktop that cannot be reached.
+ * The small clock's 18px shade is old enough to be safe there (it drew for an hour before this),
+ * the digits here are a screen wide and read on their own.
+ */
+private val FullShadow: Shadow? =
+    if (Build.VERSION.SDK_INT >= 24) Shadow(Color.Black.copy(alpha = 0.30f), Offset(0f, 3f), blurRadius = 26f)
+    else null
 
 /**
  * How far the clock has wandered with the screensaver ([saverDrift]), held once it ends: the time
@@ -736,7 +920,11 @@ private fun Modifier.toSaverClock(progress: () -> Float, fontSize: TextUnit, cap
             scaleX = k
             scaleY = k
             val targetCapTop = SaverClockTop.toPx() + SaverClockStyle.fontSize.toPx() * CAP_TOP
-            val targetLeft = if (AerialSettings.clockRight) rootW - SaverClockSide.toPx() - box.width * s else SaverClockSide.toPx()
+            val targetLeft = when (AerialSettings.clockPlace) {
+                ClockPlace.Right -> rootW - SaverClockSide.toPx() - box.width * s
+                ClockPlace.Center -> (rootW - box.width * s) / 2f
+                ClockPlace.Left -> SaverClockSide.toPx()
+            }
             translationX = p * (targetLeft - box.left + drift.x.toPx())
             translationY = p * (targetCapTop - s * capTop.toPx() - box.top + drift.y.toPx())
             // The screensaver shows no time: Home's goes as the screensaver comes.
@@ -841,31 +1029,35 @@ fun StatusPill(
         modifier = modifier,
     ) { state ->
         LaunchedEffect(state.focused) { onFocused(state.focused) }
-        val bg by animateColorAsState(
-            if (state.focused) Palette.Focus else Color.Transparent,
+        // Animate the alpha, not the color: animateColorAsState walks every ARGB channel, so
+        // Transparent -> Focus passes through a dark half-clear gray that flashed twice on the
+        // way to white (#focus-pill-flash). Focus.copy(alpha) over the wallpaper is a clean fade.
+        val bgAlpha by animateFloatAsState(
+            if (state.focused) 1f else 0f,
             tween(160, easing = Motion.EaseOut), label = "pill-bg",
         )
-        val fg = if (state.focused) Palette.OnFocus else Color.White.copy(alpha = 0.9f)
+        // The plate fades in over 160 ms, so the glyph and the time must ride the very same
+        // progress. Switching their colours outright made the dark focus glyph land on a still
+        // transparent plate (invisible for a frame) and then reappear as white faded in — read as
+        // a double flash. One progress value drives the plate, the glyph and the clock together.
+        val fg = lerp(Color.White.copy(alpha = 0.9f), Palette.OnFocus, bgAlpha)
+        // The one icon the pill keeps (the owner: 「把左侧的删除，保留右侧图标」) rests at 80%,
+        // and only at full strength once the pill is the focus.
+        val icon = lerp(Color.White.copy(alpha = 0.80f), Palette.OnFocus, bgAlpha)
         Row(
             Modifier
                 .clip(RoundedCornerShape(50))
-                .drawBehind { drawRect(bg) }
+                .drawBehind { if (bgAlpha > 0f) drawRect(Palette.Focus.copy(alpha = bgAlpha)) }
                 .height(34.dp)
                 .padding(horizontal = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            val glyph = when (network.kind) {
-                NetKind.Wifi -> Glyph.Wifi
-                NetKind.Ethernet -> Glyph.Ethernet
-                NetKind.Offline -> Glyph.Offline
-            }
-            GlyphIcon(glyph, fg, 17.dp, level = network.level)
             if (network.vpn) VpnBadge(fg)
             if (showTime) {
                 BasicText(timeText(now), style = Type.Headline.copy(color = fg))
             }
-            GlyphIcon(Glyph.Switches, fg, 17.dp)
+            GlyphIcon(Glyph.Switches, icon, 17.dp)
         }
     }
 }

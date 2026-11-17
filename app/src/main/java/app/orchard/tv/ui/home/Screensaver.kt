@@ -5,6 +5,9 @@ import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.view.View
+import android.view.ViewGroup
+import android.webkit.WebView
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
@@ -32,6 +35,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -39,12 +43,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import app.orchard.tv.MainActivity
+import app.orchard.tv.PuzzleShell
 import app.orchard.tv.system.SystemScreensaver
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -64,6 +72,7 @@ import app.orchard.tv.wallpaper.Aerial
 import app.orchard.tv.wallpaper.AerialSet
 import androidx.compose.runtime.mutableStateListOf
 import app.orchard.tv.settings.AerialSettings
+import app.orchard.tv.settings.ClockPlace
 import app.orchard.tv.wallpaper.AerialFormats
 import app.orchard.tv.wallpaper.AerialQuality
 import app.orchard.tv.wallpaper.Aerials
@@ -139,6 +148,7 @@ fun Screensaver(visible: Boolean, apps: List<AppEntry>, now: LocalDateTime, skip
                 ScreensaverMode.Photos -> PhotoSaver(now, skips.steps, remember { Wallpapers.screensaverPicture() })
                 ScreensaverMode.Clock, ScreensaverMode.System -> ClockSaver(apps, now)
                 ScreensaverMode.Videos -> if (videosFailed) PhotoSaver(now, skips.steps) else VideoSaver(skips.steps, leaving = !visible, onUnavailable = { videosFailed = true })
+                ScreensaverMode.Puzzle -> if (!puzzleCanRun(context)) PhotoSaver(now, skips.steps) else PuzzleSaver(skips)
             }
         }
     }
@@ -152,8 +162,18 @@ class ScreensaverSkips {
     private val flow = MutableSharedFlow<Int>(extraBufferCapacity = 8)
     val steps: SharedFlow<Int> get() = flow
 
+    /**
+     * A screensaver that plays rather than merely shows (the puzzle): it takes the keys it knows
+     * and the screensaver stays up, so the owner can go on playing. True means taken; false falls
+     * through to the keys below, and to waking. Null for the other kinds.
+     */
+    var keys: ((KeyEvent) -> Boolean)? = null
+
     /** True if the screensaver took [event], both its down and its up. The clock has nothing to step through. */
     fun onKey(event: KeyEvent): Boolean {
+        // The puzzle first: it plays with every arrow and OK, which the steps below would
+        // otherwise take for "next film" and for "end the screensaver".
+        keys?.let { if (it(event)) return true }
         val step = when (event.keyCode) {
             KeyEvent.KEYCODE_DPAD_LEFT -> -1
             KeyEvent.KEYCODE_DPAD_RIGHT -> 1
@@ -349,7 +369,13 @@ private fun Labels(
             timeText(now),
             style = SaverClockStyle,
             modifier = Modifier
-                .align(if (AerialSettings.clockRight) Alignment.TopEnd else Alignment.TopStart)
+                .align(
+                    when (AerialSettings.clockPlace) {
+                        ClockPlace.Left -> Alignment.TopStart
+                        ClockPlace.Center -> Alignment.TopCenter
+                        ClockPlace.Right -> Alignment.TopEnd
+                    },
+                )
                 .padding(top = SaverClockTop, start = SaverClockSide, end = SaverClockSide)
                 .graphicsLayer {
                     alpha = time
@@ -646,6 +672,105 @@ private const val STALL_MS = 8_000L
 
 private val DECODER_ERRORS = PlaybackException.ERROR_CODE_DECODER_INIT_FAILED..PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED
 
+/**
+ * Whether the puzzle can be shown: it is a WebView, which needs an Activity's window. As the TV's
+ * own dream (AerialDream is a DreamService) there is no window to put one in, so the photos stand in.
+ */
+private fun puzzleCanRun(context: android.content.Context): Boolean {
+    var c: android.content.Context? = context
+    while (c is android.content.ContextWrapper) {
+        if (c is android.app.Activity) return true
+        c = c.baseContext
+    }
+    return false
+}
+
+/**
+ * The wallpaper as a jigsaw, shuffled, played with the remote. The board is the picture cut up,
+ * so the screen is the wallpaper while it is up; solved, it deals another a moment later and goes
+ * on, which is what a screensaver of a puzzle should do with nobody there.
+ *
+ * It is the bundled HTML prototype, the same one Home's tile opens (PuzzleActivity), in its own
+ * screensaver mode: index.html?saver=1 drops the HUD, the hints and the corner label, fills the
+ * screen with the board, and dims the focus frame once the remote has been left alone a while.
+ */
+@Composable
+private fun PuzzleSaver(skips: ScreensaverSkips) {
+    // Held across recompositions: the keys go straight to this view, not through Compose focus.
+    val web = remember { mutableStateOf<WebView?>(null) }
+    DisposableEffect(Unit) {
+        skips.keys = { event -> puzzleKey(web.value, event) }
+        onDispose {
+            // Home is back: nothing may swallow its keys from here on.
+            skips.keys = null
+            web.value = null
+        }
+    }
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        AndroidView(
+            factory = { ctx ->
+                WebView(ctx).apply {
+                    // The board is the wallpaper itself: nothing else is drawn behind it.
+                    setBackgroundColor(android.graphics.Color.BLACK)
+                    settings.apply {
+                        javaScriptEnabled = true
+                        domStorageEnabled = true     // the game keeps progress and tuning here
+                        mediaPlaybackRequiresUserGesture = false
+                        textZoom = 100
+                        // Deliberately NOT useWideViewPort / loadWithOverviewMode: with the page's
+                        // own device-width viewport they double-scale the 1920x1080 design.
+                    }
+                    // This TV's WebView settles on a page zoom of ~1.75x its layout viewport, which
+                    // magnifies the design into a crop. Pin the scale to 1:1 CSS pixel : device pixel.
+                    setInitialScale(100)
+                    // Keys arrive through ScreensaverSkips; the view must never take focus itself.
+                    isFocusable = false
+                    isFocusableInTouchMode = false
+                    layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    )
+                    // Software, as in the game's own window: this set's GPU driver gives
+                    // Chromium no EGL config, and the page painted nothing but its dark stage
+                    // (see PuzzleShell). A software LAYER on the view is enough — the window
+                    // around it stays accelerated.
+                    setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+                    // The same window Home's tile opens: the page plays whatever picture Home shows,
+                    // handed over by the shell (it cannot read the app's private storage itself).
+                    PuzzleShell.bind(this)
+                    loadUrl(PuzzleShell.page())
+                    web.value = this
+                }
+            },
+            modifier = Modifier.fillMaxSize(),
+            onRelease = { it.destroy() },
+        )
+    }
+}
+
+/**
+ * A key of the puzzle, from the remote: true when the game took it (the screensaver stays up).
+ * Back and anything else the game does not use fall through, and end the screensaver as usual.
+ */
+private fun puzzleKey(web: WebView?, event: KeyEvent): Boolean {
+    val key = when (event.keyCode) {
+        KeyEvent.KEYCODE_DPAD_UP -> "ArrowUp"
+        KeyEvent.KEYCODE_DPAD_DOWN -> "ArrowDown"
+        KeyEvent.KEYCODE_DPAD_LEFT -> "ArrowLeft"
+        KeyEvent.KEYCODE_DPAD_RIGHT -> "ArrowRight"
+        KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> "Enter"
+        KeyEvent.KEYCODE_MENU -> "m"        // the game's own menu
+        else -> return false
+    }
+    // One key per press, as the page's own listeners expect; held keys do not repeat the move.
+    if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+        val js = "(function(){document.dispatchEvent(new KeyboardEvent('keydown'," +
+            "{key:'" + key + "',bubbles:true,cancelable:true}));})()"
+        web?.evaluateJavascript(js, null)
+    }
+    return true
+}
+
 @Composable
 private fun PhotoSaver(
     now: LocalDateTime,
@@ -710,43 +835,132 @@ private fun PhotoSaver(
     Labels(wp?.let(::stillCaption), now, showTime = carried == null || image != null)
 }
 
-/** A large clock that moves once a minute over the wallpaper or the apps' light. */
+/**
+ * The clock screensaver: the time alone, full size on black, cut out of the day's picture (the
+ * owner's image). No date, weather, lunar day or term. The digits keep Home's own typeface and
+ * weight ([Type.Clock]); only their size changes. Bing's daily photo is used when one is there,
+ * otherwise whatever Home is showing. A few pixels of drift each minute keep a fixed shape from
+ * burning into an OLED panel.
+ */
 @Composable
 private fun ClockSaver(apps: List<AppEntry>, now: LocalDateTime) {
     val minute = now.withSecond(0).withNano(0)
-    val scene = remember(minute, apps.size, Wallpapers.backdrop) {
-        val rnd = Random(minute.hashCode())
-        Scene(
-            light = Wallpapers.backdrop ?: apps.takeIf { it.isNotEmpty() }?.get(rnd.nextInt(apps.size))?.art?.backdrop,
-            x = rnd.nextFloat(),
-            y = rnd.nextFloat(),
-        )
-    }
-    BoxWithConstraints(Modifier.fillMaxSize()) {
-        val w = maxWidth
-        val h = maxHeight
-        // The light apart from the clock: with a wallpaper it is the same picture every minute, and
-        // crossfaded against itself it dimmed for two seconds each time the clock moved. Opaque
-        // (black under it), so a new one can fade in over the old.
-        Dissolve(targetState = scene.light, durationMs = 2400, easing = Motion.EaseInOut, modifier = Modifier.fillMaxSize(), label = "clock-light") { light ->
-            Canvas(Modifier.fillMaxSize()) {
-                drawRect(Color.Black)
-                if (light != null) {
-                    drawImage(light, dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()), filterQuality = FilterQuality.Low, alpha = 0.75f)
-                }
-            }
+    val day = now.toLocalDate().toEpochDay()
+    val art by produceState<ImageBitmap?>(null, day) {
+        value = withContext(Dispatchers.IO) {
+            val wp = Wallpapers.resolve(Wallpapers.LATEST_DAILY)
+                ?: Wallpapers.resolve()
+                ?: Wallpapers.items.firstOrNull()
+            // No pre-crop: the picture is cover-cropped to the time box at draw time,
+            // so its pixels keep their own aspect ratio inside the glyphs (the owner: 「图案有拉伸」).
+            wp?.let { Wallpapers.picture(it, 1920, 1080)?.asImageBitmap() }
         }
-        Crossfade(targetState = scene, animationSpec = tween(2400, easing = Motion.EaseInOut), label = "clock-scene") { s ->
-            Box(Modifier.fillMaxSize()) {
-                Column(
-                    Modifier.offset(
-                        x = 64.dp + (w - 64.dp * 2 - 420.dp) * s.x,
-                        y = 56.dp + (h - 56.dp * 2 - 170.dp) * s.y,
-                    ),
-                ) { ShelfClock(now = now) }
-            }
+    }
+    val text = timeText(now)
+    val drift = remember(minute) {
+        val rnd = Random(minute.hashCode())
+        (rnd.nextFloat() - 0.5f) * 16f to (rnd.nextFloat() - 0.5f) * 12f
+    }
+    // The cut-out is built once a minute on a background thread, not in DrawScope. On the Xiaomi
+    // TV (Android 6) a text brush/blend left only the colon's two dots; composing the glyphs and
+    // the picture into plain ARGB pixels and drawing that bitmap needs no shader at all, so every
+    // digit is painted. Wallpapers.screenW/H is the full-screen Canvas size.
+    val cutout by produceState<ImageBitmap?>(null, text, art, drift) {
+        value = withContext(Dispatchers.Default) {
+            clockCutout(
+                text,
+                art?.asAndroidBitmap(),
+                Wallpapers.screenW, Wallpapers.screenH,
+                drift.first, drift.second,
+            ).asImageBitmap()
+        }
+    }
+    Box(Modifier.fillMaxSize()) {
+        Canvas(Modifier.fillMaxSize()) {
+            drawRect(Color.Black)
+            cutout?.let { drawImage(it, dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt())) }
         }
     }
 }
 
-private data class Scene(val light: ImageBitmap?, val x: Float, val y: Float)
+/**
+ * The time as [text], full size, with the daily picture showing inside the glyphs and black
+ * everywhere else — as one ARGB bitmap made on the CPU. A white text mask gives each pixel's
+ * alpha; the picture's RGB is copied where that alpha is nonzero. Building the pixels ourselves
+ * avoids the offscreen blend and the text shader that, on the Xiaomi TV's Android 6 Skia, drew
+ * only the colon (owner: 「满屏时间屏保…还是两个大圆点」).
+ *
+ * Typeface and tracking match [Type.Clock]: below Android 8 Compose's Inter falls back to the
+ * system sans (that is why the TV's clock has always looked the way it does), and -0.04 em
+ * tracking is set on the Paint in px. The type is scaled to fill 94% of the width, capped at 80%
+ * of the height, exactly as the Compose version measured it.
+ */
+private fun clockCutout(
+    text: String,
+    picture: android.graphics.Bitmap?,
+    w: Int,
+    h: Int,
+    driftX: Float,
+    driftY: Float,
+): android.graphics.Bitmap {
+    val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        typeface = android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF, android.graphics.Typeface.BOLD)
+        color = -1
+    }
+    fun size(px: Float) {
+        paint.textSize = px
+        // Paint.letterSpacing is in em, not px: multiplying by the (large) font size made the
+        // glyph bounds blow up to 150000 px wide and the mask ended up with zero lit pixels —
+        // the clock showed as black with no digits at all. Type.Clock's -0.04 em maps straight over.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) paint.letterSpacing = -0.04f
+    }
+    val room = w * 0.94f
+    var fontSize = w / 2.4f
+    size(fontSize)
+    val measured = paint.measureText(text).coerceAtLeast(1f)
+    fontSize *= room / measured
+    size(fontSize)
+    val bounds = android.graphics.Rect()
+    paint.getTextBounds(text, 0, text.length, bounds)
+    if (bounds.height() > h * 0.80f) {
+        fontSize *= (h * 0.80f) / bounds.height()
+        size(fontSize)
+        paint.getTextBounds(text, 0, text.length, bounds)
+    }
+    val left = (w - paint.measureText(text)) / 2f - bounds.left + driftX
+    val baseline = (h - bounds.height()) / 2f - bounds.top + driftY
+
+    val mask = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+    android.graphics.Canvas(mask).drawText(text, left, baseline, paint)
+    val out = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+    val alpha = IntArray(w * h)
+    mask.getPixels(alpha, 0, w, 0, 0, w, h)
+    mask.recycle()
+
+    if (picture == null) {
+        // No picture yet: the digits are plain white, still with their antialiased edges.
+        for (i in alpha.indices) alpha[i] = (alpha[i] and -0x1000000) or 0x00FFFFFF
+        out.setPixels(alpha, 0, w, 0, 0, w, h)
+        return out
+    }
+    // Cover-crop the picture to the screen, never stretch (a tree stays round). Draw into a fresh
+    // bitmap with a Matrix: Bitmap.createBitmap(src, ...) returns src itself when the crop is the
+    // whole picture, and createScaledBitmap returns its input when the size is unchanged — recycling
+    // those recycled the owner's daily photo, so the next getPixels() threw on the main thread and
+    // the clock never showed (「满屏时钟还是两个圆点」).
+    val fitted = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+    val scale = maxOf(w.toFloat() / picture.width, h.toFloat() / picture.height)
+    val dw = picture.width * scale
+    val dh = picture.height * scale
+    val matrix = android.graphics.Matrix().apply {
+        setScale(scale, scale)
+        postTranslate((w - dw) / 2f, (h - dh) / 2f)
+    }
+    android.graphics.Canvas(fitted).drawBitmap(picture, matrix, null)
+    val rgb = IntArray(w * h)
+    fitted.getPixels(rgb, 0, w, 0, 0, w, h)
+    fitted.recycle()
+    for (i in alpha.indices) rgb[i] = (alpha[i] and -0x1000000) or (rgb[i] and 0x00FFFFFF)
+    out.setPixels(rgb, 0, w, 0, 0, w, h)
+    return out
+}

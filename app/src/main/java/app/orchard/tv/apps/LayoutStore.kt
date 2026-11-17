@@ -28,6 +28,16 @@ class LayoutStore(context: Context) {
     private var folders: Map<String, Folder> = readFolders(prefs.getString("folders", null))
     private var initialized = prefs.getBoolean("initialized", false)
 
+    init {
+        // Aerial's puzzle game starts out of the way (the owner: 「把拼图APP图标默认放在隐藏app
+        // 里」): once, so an owner who brought it back to Home keeps it there.
+        if (!prefs.getBoolean("puzzle_hidden", false)) {
+            hidden = hidden + PuzzleTile.KEY
+            prefs.edit().putBoolean("puzzle_hidden", true).apply()
+            save()
+        }
+    }
+
     /**
      * Home in the user's order. Newly installed apps join at the end; [folderTile] makes the tile
      * for a folder from the apps in it that are installed and not hidden. A folder with none of
@@ -185,6 +195,14 @@ class LayoutStore(context: Context) {
         save()
     }
 
+    /** Whether [key] holds a place in the saved order. Tiles the store does not keep — the puzzle
+     *  tile, the demo tiles, which are made up at arrange time and leave nothing behind — cannot
+     *  move through [move]: it finds neither key and does nothing. */
+    fun holds(key: String): Boolean = key in order
+
+    /** Whether [key] is in 隐藏的 App — including the puzzle tile, which Home makes up itself. */
+    fun isHidden(key: String): Boolean = key in hidden
+
     private fun save() = prefs.edit {
         putString("order", order.joinToString(","))
         putStringSet("hidden", hidden)
@@ -244,5 +262,7 @@ private object Defaults {
     fun hidden(installed: Set<String>): Set<String> = buildSet {
         // Xiaomi's own settings app covers everything AOSP settings does, and more.
         if ("com.xiaomi.mitv.settings" in installed) add("com.android.tv.settings")
+        // Aerial's own puzzle game starts hidden; the owner asked for it in 隐藏的 App.
+        add(PuzzleTile.KEY)
     }
 }

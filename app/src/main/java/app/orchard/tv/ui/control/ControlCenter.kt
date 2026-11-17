@@ -47,6 +47,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.Image
@@ -81,6 +82,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -106,21 +108,39 @@ import app.orchard.tv.system.SystemProbe
 import app.orchard.tv.ui.components.Pressable
 import app.orchard.tv.ui.components.consumeTaps
 import app.orchard.tv.ui.components.dismissOnTap
+import app.orchard.tv.ui.components.PanelBright
 import app.orchard.tv.ui.components.liquidGlass
 import app.orchard.tv.ui.home.MenuRow
 import app.orchard.tv.ui.home.VpnBadge
-import app.orchard.tv.ui.home.dateText
-import app.orchard.tv.ui.home.timeText
 import app.orchard.tv.ui.theme.Glyph
 import app.orchard.tv.ui.theme.GlyphIcon
+import app.orchard.tv.ui.theme.LocalLightPanel
 import app.orchard.tv.ui.theme.Motion
 import app.orchard.tv.ui.theme.Palette
 import app.orchard.tv.ui.theme.Type
-import app.orchard.tv.update.ReleaseNotes
 import app.orchard.tv.update.SelfCompile
 import app.orchard.tv.update.Updates
 import app.orchard.tv.wallpaper.PhoneServer
-import java.time.LocalDateTime
+
+/**
+ * Text on Control Center's white glass. The shared styles carry the dark theme's white labels, so
+ * their colors are swapped for the light appearance here; a color already picked by the caller
+ * (the ink of a focused control, say) passes through unchanged.
+ */
+@Composable
+private fun CcText(
+    text: String,
+    style: TextStyle,
+    modifier: Modifier = Modifier,
+    maxLines: Int = Int.MAX_VALUE,
+    overflow: TextOverflow = TextOverflow.Clip,
+) = BasicText(
+    text,
+    style = style,
+    modifier = modifier,
+    maxLines = maxLines,
+    overflow = overflow,
+)
 
 /**
  * tvOS Control Center: a glass panel that drops in from the top-right corner over a blurred Home.
@@ -131,7 +151,6 @@ fun ControlCenter(
     visible: Boolean,
     page: CcPage,
     vm: HomeViewModel,
-    now: LocalDateTime,
     onOpen: (android.content.Intent) -> Unit,
     onClose: () -> Unit,
     /** Draw the closed panel once, nearly transparent, so that its first opening is not its first draw (HomeScreen). */
@@ -144,11 +163,10 @@ fun ControlCenter(
             CcPage.Main -> onClose()
             CcPage.Inputs -> vm.overlay = Overlay.ControlCenter(CcPage.Main)
             CcPage.InputSettings -> vm.overlay = Overlay.ControlCenter(CcPage.Inputs)
-            CcPage.Update, CcPage.Setup -> vm.overlay = Overlay.ControlCenter(CcPage.Main)
+            CcPage.Setup -> vm.overlay = Overlay.ControlCenter(CcPage.Main)
         }
     }
 
-    LaunchedEffect(visible) { if (visible) Updates.checkIfStale(maxAgeMs = Updates.CONTROL_CENTER_MAX_AGE_MS) }
     // Whether Aerial is the default home, read again each time the panel opens. Recreated after a
     // standby kill, Aerial kept the "not the default home screen" it read while the firmware was
     // still waking, and the activity's polling (MainActivity) never ran: Xiaomi MiTV-AZFP0,
@@ -171,8 +189,8 @@ fun ControlCenter(
         // against about 26 ms on the second opening (Xiaomi MiTV-MFTR0, release build). Drawn once
         // at 1% while Home is idle, without focus, the first opening is like the second.
         if (warm && !visible) {
-            Column(Modifier.graphicsLayer { alpha = 0.01f }.width(300.dp).liquidGlass(24.dp).padding(16.dp)) {
-                MainPage(vm, now, takeFocus = false, poll = false, onOpen = onOpen)
+            Column(Modifier.graphicsLayer { alpha = 0.01f }.width(300.dp).liquidGlass(24.dp, milk = 0.30f, tint = PanelBright).padding(16.dp)) {
+                MainPage(vm, takeFocus = false, poll = false, onOpen = onOpen)
             }
         }
         AnimatedVisibility(
@@ -185,7 +203,7 @@ fun ControlCenter(
                 Modifier
                     .width(300.dp)
                     .consumeTaps()
-                    .liquidGlass(24.dp, seeThroughFilm = onShelf),
+                    .liquidGlass(24.dp, seeThroughFilm = onShelf, milk = 0.30f, tint = PanelBright),
             ) {
                 AnimatedContent(
                     targetState = page,
@@ -203,16 +221,16 @@ fun ControlCenter(
                     Box(Modifier.padding(16.dp)) {
                         // Closing sets the page back to Main while the panel fades out; that page must
                         // not take focus from the tile Home has just put it back on.
-                        when (p) {
-                            CcPage.Main -> if (Restricted.active) {
-                                KidsPage(vm, now, visible)
-                            } else {
-                                MainPage(vm, now, takeFocus = visible, poll = visible, onOpen = onOpen)
-                            }
-                            CcPage.Inputs -> InputsPage(vm, visible, onOpen)
-                            CcPage.InputSettings -> InputSettingsPage(vm, visible)
-                            CcPage.Update -> UpdatePage(vm, visible)
-                            CcPage.Setup -> SetupPage(vm, visible, onOpen)
+                        CompositionLocalProvider(LocalLightPanel provides false) {
+                            when (p) {
+                                CcPage.Main -> if (Restricted.active) {
+                                    KidsPage(vm, visible)
+                                } else {
+                                    MainPage(vm, takeFocus = visible, poll = visible, onOpen = onOpen)
+                                }
+                                CcPage.Inputs -> InputsPage(vm, visible, onOpen)
+                                CcPage.InputSettings -> InputSettingsPage(vm, visible)
+                                CcPage.Setup -> SetupPage(vm, visible, onOpen)                            }
                         }
                     }
                 }
@@ -226,7 +244,7 @@ fun ControlCenter(
  * time left, and leaving the mode with the PIN. No inputs, network, settings or Personalize.
  */
 @Composable
-private fun KidsPage(vm: HomeViewModel, now: LocalDateTime, takeFocus: Boolean) {
+private fun KidsPage(vm: HomeViewModel, takeFocus: Boolean) {
     val first = remember { FocusRequester() }
     val context = LocalContext.current
     val laser = remember { HisenseLaserPanel.usable(context) }
@@ -239,11 +257,10 @@ private fun KidsPage(vm: HomeViewModel, now: LocalDateTime, takeFocus: Boolean) 
         runCatching { first.requestFocus() }
     }
     Column {
-        BasicText(timeText(now), style = Type.SmallClock.copy(fontSize = Type.LargeTitle.fontSize * 1.05f))
-        BasicText(dateText(now), style = Type.Callout)
+        // Same as the main page: no clock here, Home's bar has one.
         kidsTimeLine()?.let {
+            CcText(it, style = Type.Callout.copy(color = Palette.SecondaryLabel))
             Spacer(Modifier.height(6.dp))
-            BasicText(it, style = Type.Callout.copy(color = Palette.SecondaryLabel))
         }
         Spacer(Modifier.height(12.dp))
         // A box or stick has neither a panel nor, with its volume fixed, a sound level of its own (#1307).
@@ -265,7 +282,6 @@ private fun KidsPage(vm: HomeViewModel, now: LocalDateTime, takeFocus: Boolean) 
 @Composable
 private fun MainPage(
     vm: HomeViewModel,
-    now: LocalDateTime,
     takeFocus: Boolean,
     /** The row polls the picture service, so only the copy that is on screen may do it. */
     poll: Boolean,
@@ -275,16 +291,14 @@ private fun MainPage(
     // The laser level belongs to the laser sets only (HisenseLaserPanel); every other TV keeps
     // the brightness row it had.
     val laser = remember { HisenseLaserPanel.usable(context) }
-    val showsVolume = remember { OutputDevice.showsVolume(context) }
     val showsBrightness = remember { OutputDevice.showsBrightness() }
     PollBrightness(vm, laser, poll)
+    // One row of four: Personalize, Settings, Inputs, Network. Personalize takes the focus when the
+    // panel opens, as the first button of the row.
     val first = remember { FocusRequester() }
-    val networkFocus = remember { FocusRequester() }
     val settingsFocus = remember { FocusRequester() }
-    // The buttons share one row above a panel-wide slider, so focus searching up from it has three
-    // equally near choices and takes the middle one, Network, whichever button Down came from
-    // (75A7D). Remember that button and send Up back to it.
-    var cameFrom by remember { mutableStateOf(first) }
+    val inputsFocus = remember { FocusRequester() }
+    val networkFocus = remember { FocusRequester() }
     // Firmwares that list their inputs late (see HomeViewModel.refreshSources): look again while
     // the page is open and still empty. One provider or TvInputManager query every 3 s.
     LaunchedEffect(Unit) {
@@ -300,10 +314,21 @@ private fun MainPage(
     }
 
     Column {
-        Row(verticalAlignment = Alignment.Bottom) {
-            Column(Modifier.weight(1f)) {
-                BasicText(timeText(now), style = Type.SmallClock.copy(fontSize = Type.LargeTitle.fontSize * 1.05f))
-                BasicText(dateText(now), style = Type.Callout)
+        // No clock up here: Home's own bar shows the time at the same corner, inches above the
+        // panel. Aerial's standing as Home leads the line and the connection closes it.
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            val (dot, text) = when (vm.homeStatus) {
+                HomeStatus.Default -> Palette.Green to stringResource(R.string.cc_home_default)
+                HomeStatus.Guarded -> Palette.Green to stringResource(R.string.cc_home_guarded)
+                HomeStatus.NotDefault -> Palette.Orange to stringResource(R.string.cc_home_not_default)
+            }
+            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(7.dp).clip(CircleShape).background(dot))
+                Spacer(Modifier.width(8.dp))
+                CcText(
+                    text, style = Type.Caption, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
             }
             val net = vm.network
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -311,7 +336,7 @@ private fun MainPage(
                     when (net.kind) { NetKind.Wifi -> Glyph.Wifi; NetKind.Ethernet -> Glyph.Ethernet; NetKind.Offline -> Glyph.Offline },
                     Palette.SecondaryLabel, 14.dp, level = net.level,
                 )
-                BasicText(
+                CcText(
                     when (net.kind) {
                         NetKind.Wifi -> net.name ?: stringResource(R.string.net_wifi)
                         NetKind.Ethernet -> stringResource(R.string.net_ethernet)
@@ -325,11 +350,27 @@ private fun MainPage(
         }
 
         Spacer(Modifier.height(12.dp))
+        // How Home looks (wallpaper, screensaver, focus style, hidden apps, weather) leads the row:
+        // it is the one button here that stays inside Aerial, and the one most often wanted.
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             RoundButton(
-                Glyph.Input, stringResource(R.string.cc_inputs),
+                Glyph.Photo, stringResource(R.string.cc_personalize),
                 focusRequester = first,
-                modifier = Modifier.onFocusChanged { if (it.isFocused) cameFrom = first },
+            ) {
+                vm.overlay = Overlay.Wallpaper
+            }
+            RoundButton(
+                Glyph.Gear, stringResource(R.string.cc_settings),
+                focusRequester = settingsFocus,
+            ) {
+                vm.whenUnlocked {
+                    LaunchFallback.arm(SystemProbe.settingsFallbacks(context))
+                    onOpen(SystemProbe.settingsIntent(context))
+                }
+            }
+            RoundButton(
+                Glyph.Input, stringResource(R.string.cc_inputs),
+                focusRequester = inputsFocus,
             ) {
                 // TCL lists no inputs to Android; its own input panel is the next best thing.
                 vm.overlay = if (vm.sources.isEmpty() && SystemProbe.openInputPicker(context)) Overlay.None
@@ -339,7 +380,6 @@ private fun MainPage(
                 when (vm.network.kind) { NetKind.Ethernet -> Glyph.Ethernet; NetKind.Offline -> Glyph.Offline; else -> Glyph.Wifi },
                 stringResource(R.string.cc_network),
                 focusRequester = networkFocus,
-                modifier = Modifier.onFocusChanged { if (it.isFocused) cameFrom = networkFocus },
             ) {
                 vm.whenUnlocked {
                     val pages = SystemProbe.networkSettingsIntents(context, ethernet = vm.network.kind == NetKind.Ethernet)
@@ -347,25 +387,12 @@ private fun MainPage(
                     onOpen(pages.first())
                 }
             }
-            RoundButton(
-                Glyph.Gear, stringResource(R.string.cc_settings),
-                focusRequester = settingsFocus,
-                modifier = Modifier.onFocusChanged { if (it.isFocused) cameFrom = settingsFocus },
-            ) {
-                vm.whenUnlocked {
-                    LaunchFallback.arm(SystemProbe.settingsFallbacks(context))
-                    onOpen(SystemProbe.settingsIntent(context))
-                }
-            }
         }
 
         Spacer(Modifier.height(12.dp))
-        // A box or stick has neither a panel nor, with its volume fixed, a sound level of its own (#1307).
-        if (showsVolume) {
-            VolumeRow(vm, cameFrom)
-            Spacer(Modifier.height(6.dp))
-        }
-        if (showsBrightness) BrightnessRow(vm, laser)
+        // No volume row here: the TV's own remote already has volume keys, and the panel is a place
+        // to reach things the remote cannot (brightness, inputs, Personalize).
+        if (showsBrightness) BrightnessRow(vm, laser, upTo = first)
 
         Spacer(Modifier.height(6.dp))
         // A parent left Kids and Elders mode: one press back into it, no PIN.
@@ -376,12 +403,6 @@ private fun MainPage(
                 onClick = { Restricted.start(); vm.overlay = Overlay.None },
             )
         }
-        // How Home looks (wallpaper, screensaver, focus style, hidden apps, weather) lives in one place.
-        MenuRow(
-            Glyph.Photo,
-            stringResource(R.string.cc_personalize),
-            onClick = { vm.overlay = Overlay.Wallpaper },
-        )
         // What the TV opens when switched on: easy to forget, and puzzling when it happens.
         vm.bootTargetLabel()?.let { name ->
             MenuRow(
@@ -391,15 +412,13 @@ private fun MainPage(
                 trailing = "$name ›",
             )
         }
-        Updates.available?.let { latest ->
-            MenuRow(
-                Glyph.Info,
-                stringResource(R.string.cc_update_available, latest),
-                onClick = { vm.overlay = Overlay.ControlCenter(CcPage.Update) },
-            )
-        }
+        // Drosophila has no update channel of its own, and it is not tied to Aerial's: the row that
+        // offered "Aerial 2.0" here, the page behind it and the nightly version probe that fed
+        // them are all gone (the owner, 2026-11-17: 「目前 aerial 有新版本和我们无关联，把他的更新和
+        // 相关推送剥离出去」). SelfCompile below stays: it re-installs this same APK so the system
+        // compiles it, and never fetches anything.
 
-        // Android 9 to 11, Aerial running uncompiled: reinstalling itself has the system compile it,
+        // Android 9 to 11, Drosophila running uncompiled: reinstalling itself has the system compile it,
         // which needs the owner's confirmation there (SelfCompile; 12+ does it by itself).
         LaunchedEffect(Unit) { SelfCompile.recheck(context) }
         if (SelfCompile.offered) {
@@ -411,169 +430,13 @@ private fun MainPage(
             MenuRow(Glyph.Shield, stringResource(R.string.cc_setup_title), onClick = { vm.overlay = Overlay.ControlCenter(CcPage.Setup) }, trailing = "›")
         }
 
-        Spacer(Modifier.height(8.dp))
-        val (dot, text) = when (vm.homeStatus) {
-            HomeStatus.Default -> Palette.Green to stringResource(R.string.cc_home_default)
-            HomeStatus.Guarded -> Palette.Green to stringResource(R.string.cc_home_guarded)
-            HomeStatus.NotDefault -> Palette.Orange to stringResource(R.string.cc_home_not_default)
-        }
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 14.dp)) {
-            Box(Modifier.size(7.dp).clip(CircleShape).background(dot))
-            Spacer(Modifier.width(8.dp))
-            BasicText(text, style = Type.Caption, modifier = Modifier.weight(1f))
-            BasicText("Aerial ${Updates.current}", style = Type.Caption.copy(color = Palette.TertiaryLabel), modifier = Modifier.padding(end = 14.dp))
-        }
-    }
-}
-
-/**
- * How to move to the new version: "Download and Install" fetches the APK and opens the system
- * installer (Updates.install). For TVs whose firmware lets no app install another (see
- * Updates.Failure), and for copies older than the button, a QR code opens the website's update
- * page on a phone, with the install command for this TV to copy: typing it off the screen was
- * too much. The TV's address rides in the fragment, which the browser does not send.
- */
-@Composable
-private fun UpdatePage(vm: HomeViewModel, takeFocus: Boolean) {
-    val context = LocalContext.current
-    val first = remember { FocusRequester() }
-    LaunchedEffect(Unit) {
-        if (!takeFocus) return@LaunchedEffect
-        withFrameNanos { }
-        runCatching { first.requestFocus() }
-    }
-    DisposableEffect(Unit) { onDispose { Updates.resetInstall() } }
-    val canInstall = remember { Updates.canInstall(context) }
-    var qr by remember { mutableStateOf<ImageBitmap?>(null) }
-    LaunchedEffect(Unit) {
-        val ip = PhoneServer.lanAddress(context)
-        val url = "https://aerial.qust.me/update/#v=${Updates.current}&f=${BuildConfig.FLAVOR}" + (ip?.let { "&tv=$it" } ?: "")
-        qr = withContext(Dispatchers.Default) { PhoneServer.qr(url).asImageBitmap() }
-    }
-    Column {
-        MenuRow(
-            Glyph.ChevronLeft, stringResource(R.string.cc_update_title, Updates.available ?: Updates.current),
-            focusRequester = if (canInstall) null else first,
-            onClick = { vm.overlay = Overlay.ControlCenter(CcPage.Main) },
-        )
-        if (canInstall) {
-            val state = Updates.install
-            MenuRow(
-                Glyph.Download,
-                when (state) {
-                    is Updates.Install.Downloading -> stringResource(R.string.cc_update_downloading, (state.fraction * 100).toInt())
-                    Updates.Install.Waiting -> stringResource(R.string.cc_update_waiting)
-                    else -> stringResource(R.string.cc_update_install)
-                },
-                focusRequester = first,
-                onClick = { Updates.install(context) },
-            )
-        }
-        Column(Modifier.padding(horizontal = 14.dp)) {
-            Spacer(Modifier.height(10.dp))
-            val status = when (val state = Updates.install) {
-                Updates.Install.Waiting -> stringResource(R.string.cc_update_waiting)
-                Updates.Install.Opened -> stringResource(R.string.cc_update_opened)
-                Updates.Install.NeedsPermission -> stringResource(R.string.cc_update_permission)
-                Updates.Install.NeedsStoragePermission -> stringResource(R.string.cc_update_storage_permission)
-                is Updates.Install.Failed -> stringResource(
-                    when (state.reason) {
-                        Updates.Failure.Download -> R.string.cc_update_failed_download
-                        Updates.Failure.Blocked -> R.string.cc_update_failed_blocked
-                        Updates.Failure.NotOfficial -> R.string.cc_update_failed_signature
-                        Updates.Failure.NotNewer -> R.string.cc_update_failed_older
-                    },
-                )
-                else -> stringResource(R.string.cc_update_current, Updates.current)
-            }
-            BasicText(status, style = Type.Caption)
-        }
-        // Read when the page opens too: the check that found the version may have missed them.
-        LaunchedEffect(Unit) { if (Updates.notes.isEmpty()) Updates.loadNotes() }
-        Updates.notes.takeIf { it.isNotEmpty() }?.let { notes ->
-            Spacer(Modifier.height(10.dp))
-            UpdateNotes(notes)
-        }
-        Column(Modifier.padding(horizontal = 14.dp)) {
-            Spacer(Modifier.height(16.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(104.dp).smoothBackground(Color.White, 12.dp).padding(8.dp)) {
-                    qr?.let { Image(it, contentDescription = null, contentScale = ContentScale.Fit, filterQuality = FilterQuality.None, modifier = Modifier.fillMaxSize()) }
-                }
-                Spacer(Modifier.width(16.dp))
-                Column(Modifier.weight(1f)) {
-                    BasicText(stringResource(if (canInstall) R.string.cc_update_scan_else else R.string.cc_update_scan), style = Type.Body)
-                    Spacer(Modifier.height(6.dp))
-                    BasicText(stringResource(R.string.cc_update_keeps), style = Type.Caption)
-                }
-            }
-        }
-    }
-}
-
-/**
- * What the update brings, release by release. The lines are not controls: focused (Down from the
- * install button), Up and Down scroll it a few lines at a time, and past either end focus moves on
- * as from any row. The panel has room for about ten lines under the install button and above the
- * QR code; a bar on the right shows how much more there is.
- */
-@Composable
-private fun UpdateNotes(notes: List<ReleaseNotes>) {
-    val scroll = rememberScrollState()
-    val scope = rememberCoroutineScope()
-    var focused by remember { mutableStateOf(false) }
-    val step = with(LocalDensity.current) { 64.dp.toPx() }
-    val glow by animateFloatAsState(if (focused) 1f else 0f, tween(140, easing = Motion.EaseOut), label = "notes-focus")
-    val scrollable = scroll.maxValue > 0
-    Box(Modifier.fillMaxWidth()) {
-        Box(Modifier.matchParentSize().graphicsLayer { alpha = glow }.smoothBackground(Palette.Fill, 12.dp))
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .heightIn(max = 164.dp)
-                .onFocusChanged { focused = it.isFocused }
-                .onKeyEvent { e ->
-                    val down = when (e.nativeKeyEvent.keyCode) {
-                        NativeKeyEvent.KEYCODE_DPAD_DOWN -> true
-                        NativeKeyEvent.KEYCODE_DPAD_UP -> false
-                        else -> return@onKeyEvent false
-                    }
-                    if (if (down) scroll.value >= scroll.maxValue else scroll.value <= 0) return@onKeyEvent false
-                    if (e.type == KeyEventType.KeyDown) {
-                        Sounds.step()
-                        scope.launch { scroll.animateScrollBy(if (down) step else -step, spring(dampingRatio = 1f, stiffness = 500f)) }
-                    }
-                    true
-                }
-                .focusProperties { canFocus = scrollable }
-                .focusable()
-                .drawWithContent {
-                    drawContent()
-                    if (scroll.maxValue <= 0) return@drawWithContent
-                    // The scroll bar, inside the right padding.
-                    val track = size.height - 16.dp.toPx()
-                    val thumb = (track * size.height / (size.height + scroll.maxValue)).coerceAtLeast(12.dp.toPx())
-                    val top = 8.dp.toPx() + (track - thumb) * scroll.value / scroll.maxValue
-                    drawRoundRect(
-                        if (focused) Palette.SecondaryLabel else Palette.TertiaryLabel,
-                        topLeft = Offset(size.width - 6.dp.toPx(), top),
-                        size = Size(2.5.dp.toPx(), thumb),
-                        cornerRadius = CornerRadius(1.25.dp.toPx()),
-                    )
-                }
-                .verticalScroll(scroll)
-                .padding(start = 14.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
-        ) {
-            notes.forEachIndexed { i, release ->
-                if (i > 0) Spacer(Modifier.height(10.dp))
-                BasicText(stringResource(R.string.cc_update_notes, release.version), style = Type.Callout.copy(color = Palette.Label))
-                release.changes.forEach { line ->
-                    Row(Modifier.padding(top = 4.dp)) {
-                        BasicText("•", style = Type.Caption, modifier = Modifier.width(10.dp))
-                        BasicText(line, style = Type.Caption, modifier = Modifier.weight(1f))
-                    }
-                }
-            }
+        // The build's own name and number, in the panel's bottom right corner. The update row that
+        // used to end this page showed "Aerial x.x" as its trailing text; with no update channel,
+        // the version keeps its place as a plain line, out of the way of the buttons
+        // (the owner, 2026-11-17: 「把版本号写在控制中心」 then 「Drosophila 1.24 放在右下角」).
+        Spacer(Modifier.height(6.dp))
+        Row(Modifier.fillMaxWidth().padding(end = 14.dp), horizontalArrangement = Arrangement.End) {
+            CcText("Drosophila ${BuildConfig.VERSION_NAME.substringBefore('-')}", style = Type.Caption)
         }
     }
 }
@@ -604,7 +467,7 @@ private fun SetupPage(vm: HomeViewModel, takeFocus: Boolean, onOpen: (android.co
     }
     Column {
         MenuRow(Glyph.ChevronLeft, stringResource(R.string.cc_setup_title), focusRequester = first, onClick = { vm.overlay = Overlay.ControlCenter(CcPage.Main) })
-        BasicText(stringResource(R.string.cc_setup_body), style = Type.Caption, modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp))
+        CcText(stringResource(R.string.cc_setup_body), style = Type.Caption, modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp))
         guard?.let { MenuRow(Glyph.Shield, stringResource(R.string.cc_setup_guard), onClick = { vm.whenUnlocked { onOpen(it) } }, trailing = stringResource(R.string.cc_setup_guard_where) + " ›") }
         home?.let { MenuRow(Glyph.Check, stringResource(R.string.cc_setup_home), onClick = { vm.whenUnlocked { onOpen(it) } }, trailing = "›") }
         revival?.let { MenuRow(Glyph.Moon, stringResource(R.string.cc_setup_revival), onClick = { vm.whenUnlocked { onOpen(it) } }, trailing = stringResource(R.string.cc_setup_revival_where) + " ›") }
@@ -614,9 +477,9 @@ private fun SetupPage(vm: HomeViewModel, takeFocus: Boolean, onOpen: (android.co
             }
             Spacer(Modifier.width(16.dp))
             Column(Modifier.weight(1f)) {
-                BasicText(stringResource(R.string.cc_setup_scan), style = Type.Body)
+                CcText(stringResource(R.string.cc_setup_scan), style = Type.Body)
                 Spacer(Modifier.height(6.dp))
-                BasicText(stringResource(R.string.cc_setup_scan_hint), style = Type.Caption)
+                CcText(stringResource(R.string.cc_setup_scan_hint), style = Type.Caption)
             }
         }
     }
@@ -635,10 +498,12 @@ private fun RoundButton(
         val bg by animateColorAsState(if (state.focused) Palette.Focus else Palette.Fill, tween(140, easing = Motion.EaseOut), label = "round-bg")
         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(64.dp)) {
             Box(Modifier.size(48.dp).clip(CircleShape).drawBehind { drawRect(bg) }, contentAlignment = Alignment.Center) {
+                // Focus fills the circle with the near-white focus plate; a white glyph on it
+                // disappears (the owner: 「四个圆图标焦点时里面的图案变黑色，否则看不出来」).
                 GlyphIcon(glyph, if (state.focused) Palette.OnFocus else Palette.Label, 20.dp)
             }
             Spacer(Modifier.height(6.dp))
-            BasicText(
+            CcText(
                 label, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 style = Type.Caption.copy(color = if (state.focused) Palette.Label else Palette.SecondaryLabel, textAlign = TextAlign.Center),
             )
@@ -682,7 +547,7 @@ private fun SliderRow(
         },
     ) { state ->
         val bg by animateColorAsState(if (state.focused) Palette.Focus else Palette.Fill, tween(140, easing = Motion.EaseOut), label = "slider-bg")
-        val fg = if (state.focused) Palette.OnFocus else Palette.Label
+        val fg = Palette.Label
         val fraction by animateFloatAsState(level, spring(dampingRatio = 1f, stiffness = 700f), label = "slider-level")
         Row(
             Modifier
@@ -709,7 +574,7 @@ private fun SliderRow(
                 drawRoundRect(fg.copy(alpha = 0.2f), cornerRadius = r)
                 drawRoundRect(fg, size = Size(size.width * fraction, size.height), cornerRadius = r)
             }
-            BasicText(
+            CcText(
                 value,
                 style = Type.Headline.copy(color = fg, textAlign = TextAlign.End),
                 modifier = Modifier.widthIn(min = 28.dp),
@@ -758,9 +623,14 @@ private fun PollBrightness(vm: HomeViewModel, laser: Boolean, enabled: Boolean) 
 /**
  * Brightness where Aerial may change it; otherwise a row that opens the TV's picture settings, and
  * says so: a bare "Brightness" with no slider read as broken (Vidda 85V1F-S, FFalcon, issue #130).
+ *
+ * [upTo] is where Up goes from this row. The row is as wide as the panel, so the default focus
+ * search found whichever of the four buttons above happened to sit nearest its middle — 设置 — while
+ * the eye reads the row above as one line starting at 个性化 (the owner: 「焦点从亮度移到上面的时候，
+ * 应该直接到个性化，而不是设置」).
  */
 @Composable
-private fun BrightnessRow(vm: HomeViewModel, laser: Boolean) {
+private fun BrightnessRow(vm: HomeViewModel, laser: Boolean, upTo: FocusRequester? = null) {
     val context = LocalContext.current
     // XGIMI (GMUI): the real brightness is the DLP light-engine level. It reads through the HAL
     // class (SystemProbe.xgimiBrightnessLevel) and, on this firmware, writes through it too, so the
@@ -769,11 +639,13 @@ private fun BrightnessRow(vm: HomeViewModel, laser: Boolean) {
     // 0..10 level, which the system setting does not move either.
     val xgimi = remember { SystemProbe.xgimiBrightnessLevel() != null }
     val level = vm.brightness
+    // Up goes to where the page starts, whichever shape the row has.
+    val up = if (upTo == null) Modifier else Modifier.focusProperties { up = upTo }
     if (level == null) {
         MenuRow(Glyph.Sun, stringResource(R.string.cc_brightness), onClick = {
             vm.overlay = Overlay.None
             SystemProbe.openPictureSettings(context)
-        }, trailing = stringResource(R.string.cc_brightness_in_settings) + " ›")
+        }, modifier = up, trailing = stringResource(R.string.cc_brightness_in_settings) + " ›")
     } else {
         SliderRow(
             glyph = Glyph.Sun,
@@ -794,6 +666,7 @@ private fun BrightnessRow(vm: HomeViewModel, laser: Boolean) {
                 else -> 20
             },
             onStep = vm::adjustBrightness,
+            modifier = up,
             onClick = {},
         )
     }
@@ -812,7 +685,7 @@ private fun InputsPage(vm: HomeViewModel, takeFocus: Boolean, onOpen: (android.c
         Spacer(Modifier.height(8.dp))
         val shown = vm.shownSources
         if (shown.isEmpty()) {
-            BasicText(stringResource(R.string.cc_no_inputs), style = Type.Callout, modifier = Modifier.padding(14.dp))
+            CcText(stringResource(R.string.cc_no_inputs), style = Type.Callout, modifier = Modifier.padding(14.dp))
         }
         val connected = stringResource(R.string.input_connected)
         shown.forEachIndexed { i, source ->
@@ -864,7 +737,7 @@ private fun InputSettingsPage(vm: HomeViewModel, takeFocus: Boolean) {
         val shown = vm.shownSources
         // Which inputs the list has: firmwares list ports the TV does not have (issue #279).
         Spacer(Modifier.height(10.dp))
-        BasicText(stringResource(R.string.cc_inputs_list), style = Type.Callout, modifier = Modifier.padding(start = 14.dp, bottom = 6.dp))
+        CcText(stringResource(R.string.cc_inputs_list), style = Type.Callout, modifier = Modifier.padding(start = 14.dp, bottom = 6.dp))
         vm.sources.forEachIndexed { i, source ->
             val listed = source.id !in AerialSettings.hiddenSources
             ChoiceRow(
@@ -874,14 +747,14 @@ private fun InputSettingsPage(vm: HomeViewModel, takeFocus: Boolean) {
                 onClick = { vm.setSourceHidden(source, listed) },
             )
         }
-        BasicText(
+        CcText(
             stringResource(R.string.cc_inputs_list_hint),
             style = Type.Caption,
             modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 8.dp),
         )
 
         Spacer(Modifier.height(18.dp))
-        BasicText(stringResource(R.string.cc_inputs_pin), style = Type.Callout, modifier = Modifier.padding(start = 14.dp, bottom = 6.dp))
+        CcText(stringResource(R.string.cc_inputs_pin), style = Type.Callout, modifier = Modifier.padding(start = 14.dp, bottom = 6.dp))
         shown.forEach { source ->
             val pinned = source.id in AerialSettings.pinnedSources
             ChoiceRow(
@@ -891,14 +764,14 @@ private fun InputSettingsPage(vm: HomeViewModel, takeFocus: Boolean) {
                 onClick = { vm.setSourcePinned(source, !pinned) },
             )
         }
-        BasicText(
+        CcText(
             stringResource(R.string.cc_inputs_pin_hint),
             style = Type.Caption,
             modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 8.dp),
         )
 
         Spacer(Modifier.height(18.dp))
-        BasicText(stringResource(R.string.cc_inputs_boot), style = Type.Callout, modifier = Modifier.padding(start = 14.dp, bottom = 6.dp))
+        CcText(stringResource(R.string.cc_inputs_boot), style = Type.Callout, modifier = Modifier.padding(start = 14.dp, bottom = 6.dp))
         ChoiceRow(
             text = stringResource(R.string.cc_inputs_boot_none),
             selected = !AerialSettings.hasBootTarget,
@@ -922,7 +795,7 @@ private fun InputSettingsPage(vm: HomeViewModel, takeFocus: Boolean) {
                 onClick = { vm.chooseBootTarget(sourceId = source.id) },
             )
         }
-        BasicText(
+        CcText(
             stringResource(R.string.cc_inputs_boot_hint),
             style = Type.Caption,
             modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 8.dp),
@@ -930,10 +803,10 @@ private fun InputSettingsPage(vm: HomeViewModel, takeFocus: Boolean) {
 
         // A device switching itself on over HDMI-CEC takes the TV (issue #1020); off unless chosen.
         Spacer(Modifier.height(18.dp))
-        BasicText(stringResource(R.string.cc_inputs_cec), style = Type.Callout, modifier = Modifier.padding(start = 14.dp, bottom = 6.dp))
+        CcText(stringResource(R.string.cc_inputs_cec), style = Type.Callout, modifier = Modifier.padding(start = 14.dp, bottom = 6.dp))
         ChoiceRow(stringResource(R.string.st_on), AerialSettings.cecSwitch, null) { AerialSettings.chooseCecSwitch(true) }
         ChoiceRow(stringResource(R.string.st_off), !AerialSettings.cecSwitch, null) { AerialSettings.chooseCecSwitch(false) }
-        BasicText(
+        CcText(
             stringResource(R.string.cc_inputs_cec_hint),
             style = Type.Caption,
             modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 8.dp),
@@ -945,13 +818,15 @@ private fun InputSettingsPage(vm: HomeViewModel, takeFocus: Boolean) {
 @Composable
 private fun ChoiceRow(text: String, selected: Boolean, focusRequester: FocusRequester?, onClick: () -> Unit) {
     Pressable(onClick = onClick, focusRequester = focusRequester, focusedScale = 1.03f, modifier = Modifier.fillMaxWidth()) { state ->
-        val bg by animateColorAsState(if (state.focused) Palette.Focus else Color.Transparent, tween(140, easing = Motion.EaseOut), label = "choice-bg")
-        val fg = if (state.focused) Palette.OnFocus else Palette.Label
+        // Alpha, not color: Transparent -> Focus walks the ARGB channels and flashes dark gray
+        // halfway (same bug as the status pill).
+        val bgAlpha by animateFloatAsState(if (state.focused) 1f else 0f, tween(140, easing = Motion.EaseOut), label = "choice-bg")
+        val fg = Palette.Label
         Row(
-            Modifier.fillMaxWidth().smoothBackground({ bg }, 12.dp).height(44.dp).padding(horizontal = 14.dp),
+            Modifier.fillMaxWidth().smoothBackground({ Palette.Focus.copy(alpha = bgAlpha) }, 12.dp).height(44.dp).padding(horizontal = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            BasicText(text, style = Type.Body.copy(color = fg), modifier = Modifier.weight(1f))
+            CcText(text, style = Type.Body.copy(color = fg), modifier = Modifier.weight(1f))
             if (selected) GlyphIcon(Glyph.Check, fg, 16.dp)
         }
     }

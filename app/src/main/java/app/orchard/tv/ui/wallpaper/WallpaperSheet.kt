@@ -36,11 +36,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -63,24 +64,31 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.foundation.text.BasicText
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import app.orchard.tv.R
 import app.orchard.tv.settings.AerialSettings
+import app.orchard.tv.settings.BackAction
 import app.orchard.tv.settings.ClockHours
+import app.orchard.tv.settings.ClockPlace
+import app.orchard.tv.settings.ClockSize
 import app.orchard.tv.settings.Restricted
 import app.orchard.tv.settings.RestrictedKind
-import app.orchard.tv.settings.FocusStyle
+import app.orchard.tv.settings.IconLook
+import app.orchard.tv.settings.IconStyle
 import app.orchard.tv.settings.UiSounds
 import app.orchard.tv.settings.Effects
 import app.orchard.tv.system.Sounds
 import app.orchard.tv.ui.components.Pressable
 import app.orchard.tv.ui.components.consumeTaps
 import app.orchard.tv.ui.components.dismissOnTap
+import app.orchard.tv.ui.components.PanelBright
 import app.orchard.tv.ui.components.liquidGlass
 import app.orchard.tv.ui.components.smoothBackground
 import app.orchard.tv.ui.components.smoothBorder
@@ -149,7 +157,9 @@ fun WallpaperSheet(
     val settled = shown.isIdle && shown.currentState
     LaunchedEffect(settled) { onSettled(settled) }
 
-    AnimatedVisibility(visible = visible, enter = fadeIn(tween(220, easing = Motion.EaseOut)), exit = fadeOut(tween(180, easing = Motion.EaseOut)), modifier = Modifier.fillMaxSize()) {
+    // The dimming follows the sheet out instead of clearing ahead of it: with 180 ms against the
+    // sheet's 380 ms slide, the top of the screen lit up while the sheet was still leaving.
+    AnimatedVisibility(visible = visible, enter = fadeIn(tween(220, easing = Motion.EaseOut)), exit = fadeOut(tween(300, delayMillis = 60, easing = Motion.EaseOut)), modifier = Modifier.fillMaxSize()) {
         // A tap above the sheet closes it, back to Control Center as Back does. Once the sheet is
         // in, the dimming stops where it starts: the sheet is opaque.
         Box(
@@ -162,6 +172,12 @@ fun WallpaperSheet(
 
     // The sheet as it opens, or (takeFocus false) drawn once nearly clear for the warm-up.
     val sheet: @Composable (takeFocus: Boolean) -> Unit = { takeFocus ->
+        // Every word here, the pills included, at two thirds of the usual size: the sheet then
+        // carries far more of Home's settings before it has to scroll (the owner: 「所有的字体包括
+        // 胶囊，都缩小到2/3。这样可以保留更多的空间玩更多的功能」). Only the type scales — the
+        // column keeps the sheet's own width — and the rows below are a little shorter to match.
+        val base = LocalDensity.current
+        CompositionLocalProvider(LocalDensity provides Density(base.density, base.fontScale * TextScale)) {
         Row(
             Modifier
                 .fillMaxWidth()
@@ -170,13 +186,17 @@ fun WallpaperSheet(
                 // Glass made from the wallpaper itself, opaque: Home is not blurred behind
                 // this sheet, so the wallpaper above it stays sharp while you choose, and the
                 // app grid must not show through.
-                .liquidGlass(SheetCorner, bottomCorners = false)
+                .liquidGlass(SheetCorner, bottomCorners = false, milk = 0.30f, tint = PanelBright)
                 .padding(start = 40.dp, end = 32.dp, top = 24.dp),
         ) {
             val scroll = rememberScrollState()
             val scope = rememberCoroutineScope()
-            // How Home looks, in the order you see it: the picture behind everything, how Home
-            // is laid out over it, what replaces it when idle, then the weather and the PIN.
+            // How Home looks, in the order you see it: the picture behind everything, the grid
+            // laid over it, the clock and weather above it, then what replaces it when idle —
+            // and after that the knobs behind all of it: how much this TV can render, what the
+            // remote's keys do, and who may change any of it. One thought per section: the
+            // effects level used to share a card with the key sounds, which are not the same
+            // question at all (the owner, 2026-11-17: 「效果和按键声音放在一起，感觉不合适」).
             // Settings sit in tvOS-style grouped rows; each group's note follows the focused row.
             Column(Modifier.weight(1f).fillMaxHeight().verticalScroll(scroll).latestBringIntoView(scroll)) {
                 BasicText(stringResource(R.string.wp_title), style = Type.LargeTitle)
@@ -208,28 +228,31 @@ fun WallpaperSheet(
 
                 Spacer(Modifier.height(6.dp))
                 SectionTitle(R.string.st_home_layout)
-                // What is on Home and where; then the clock; then how the remote feels.
+                // What is on Home and where; then the clock; then how the remote feels. The layout
+                // itself (one row, the next peeking, six across, on glass) is fixed now, so the
+                // rows it used to take are gone and the icon style comes first.
                 Group { note ->
+                    // An extra, opt-in tile look. Original leaves every Aerial Home style untouched.
                     Choices(
-                        R.string.st_layout, stringResource(R.string.st_home_layout_hint), note,
-                        listOf(true to R.string.st_home_one_row, false to R.string.st_home_standard),
-                        AerialSettings.oneRowHome, AerialSettings::chooseOneRowHome, first = true,
+                        R.string.st_icon_style, stringResource(R.string.st_icon_style_hint), note,
+                        listOf(
+                            IconStyle.Original to R.string.st_icon_style_original,
+                            IconStyle.Translucent to R.string.st_icon_style_translucent,
+                            IconStyle.Dock to R.string.st_icon_style_dock,
+                            IconStyle.Wheel to R.string.st_icon_style_wheel,
+                            IconStyle.Hidden to R.string.st_icon_style_hidden,
+                        ),
+                        AerialSettings.iconStyle, AerialSettings::chooseIconStyle, first = true,
                     )
-                    // Two rows show the second row whole; only one row has a peek to hide.
-                    if (AerialSettings.oneRowHome) Choices(
-                        R.string.st_peek, stringResource(R.string.st_peek_hint), note,
-                        listOf(true to R.string.st_peek_show, false to R.string.st_peek_hide),
-                        AerialSettings.peekNextRow, AerialSettings::choosePeekNextRow,
-                    )
+                    // Right under the style it dresses (the owner, 2026-11-17: 「图标颜色风格放在
+                    // 图标风格下面」): the two answer the same question — what an icon looks like.
                     Choices(
-                        R.string.st_columns, stringResource(R.string.st_columns_hint), note,
-                        AerialSettings.HOME_COLUMNS.map { it to it.toString() },
-                        AerialSettings.homeColumns, AerialSettings::chooseHomeColumns,
-                    )
-                    Choices(
-                        R.string.st_plate, stringResource(R.string.st_plate_hint), note,
-                        listOf(true to R.string.st_plate_glass, false to R.string.st_plate_none),
-                        AerialSettings.homePlate, AerialSettings::chooseHomePlate,
+                        R.string.st_icon_look, stringResource(R.string.st_icon_look_hint), note,
+                        listOf(
+                            IconLook.Original to R.string.st_icon_look_original,
+                            IconLook.Dopamine to R.string.st_icon_look_dopamine,
+                        ),
+                        AerialSettings.iconLook, AerialSettings::chooseIconLook,
                     )
                     Choices(
                         R.string.st_names, stringResource(R.string.st_names_hint), note,
@@ -246,21 +269,31 @@ fun WallpaperSheet(
                     }
                     Choices(
                         R.string.st_home_lock, stringResource(R.string.st_home_lock_hint), note,
-                        listOf(false to R.string.st_off, true to R.string.st_on),
+                        listOf(true to R.string.st_on, false to R.string.st_off),
                         AerialSettings.homeLocked, onHomeLock,
                     )
                 }
                 Spacer(Modifier.height(10.dp))
+                SectionTitle(R.string.sec_clock)
                 Group { note ->
                     Choices(
                         R.string.st_clock, stringResource(R.string.st_clock_hint), note,
-                        listOf(false to R.string.st_clock_left, true to R.string.st_clock_right),
-                        AerialSettings.clockRight, AerialSettings::chooseClockRight, first = true,
+                        listOf(
+                            ClockPlace.Left to R.string.st_clock_left,
+                            ClockPlace.Center to R.string.st_clock_center,
+                            ClockPlace.Right to R.string.st_clock_right,
+                        ),
+                        AerialSettings.clockPlace, AerialSettings::chooseClockPlace, first = true,
                     )
                     Choices(
                         R.string.st_clock_size, stringResource(R.string.st_clock_size_hint), note,
-                        listOf(false to R.string.st_clock_small, true to R.string.st_clock_large),
-                        AerialSettings.largeClock, AerialSettings::chooseLargeClock,
+                        listOf(
+                            ClockSize.Small to R.string.st_clock_small,
+                            ClockSize.Large to R.string.st_clock_large,
+                            ClockSize.XL to R.string.st_clock_xl,
+                            ClockSize.Full to R.string.st_clock_full,
+                        ),
+                        AerialSettings.clockSize, AerialSettings::chooseClockSize,
                     )
                     Choices(
                         R.string.st_clock_hours, stringResource(R.string.st_clock_hours_hint), note,
@@ -272,68 +305,50 @@ fun WallpaperSheet(
                         listOf(true to R.string.st_on, false to R.string.st_off),
                         AerialSettings.showWeather, AerialSettings::chooseShowWeather,
                     )
+                    // Both off as they come: a Home that has never asked for the Chinese date
+                    // should not carry it, and the term is read with it. On first, off second,
+                    // as the weather row is (the owner).
+                    Choices(
+                        R.string.st_clock_lunar, stringResource(R.string.st_clock_lunar_hint), note,
+                        listOf(true to R.string.st_on, false to R.string.st_off),
+                        AerialSettings.clockLunar, AerialSettings::chooseClockLunar,
+                    )
+                    Choices(
+                        R.string.st_clock_term, stringResource(R.string.st_clock_term_hint), note,
+                        listOf(true to R.string.st_on, false to R.string.st_off),
+                        AerialSettings.clockTerm, AerialSettings::chooseClockTerm,
+                    )
                 }
-                Spacer(Modifier.height(10.dp))
-                Group { note ->
-                    Choices(
-                        R.string.st_focus_style,
-                        stringResource(if (AerialSettings.focusStyle == FocusStyle.HighContrast) R.string.st_focus_high_hint else R.string.st_focus_standard_hint),
-                        note,
-                        listOf(FocusStyle.HighContrast to R.string.st_focus_high, FocusStyle.Standard to R.string.st_focus_standard),
-                        AerialSettings.focusStyle, AerialSettings::chooseFocusStyle, first = true,
-                    )
-                    Choices(
-                        R.string.st_sounds,
-                        stringResource(if (AerialSettings.uiSounds == UiSounds.Tv) R.string.st_sounds_tv_hint else R.string.st_sounds_hint),
-                        note,
-                        listOf(UiSounds.Tv to R.string.st_sounds_tv, UiSounds.Aerial to R.string.st_sounds_aerial, UiSounds.Off to R.string.st_off),
-                        AerialSettings.uiSounds, { AerialSettings.chooseUiSounds(it); Sounds.prepare() },
-                    )
-                    Choices(
-                        R.string.st_effects,
-                        stringResource(
-                            if (AerialSettings.effects == Effects.Auto && AerialSettings.lowEnd) R.string.st_effects_auto_lite_hint
-                            else R.string.st_effects_hint,
-                        ),
-                        note,
-                        listOf(Effects.Auto to R.string.st_effects_auto, Effects.Full to R.string.st_effects_full, Effects.Lite to R.string.st_effects_lite),
-                        AerialSettings.effects, AerialSettings::chooseEffects,
-                    )
+                // The city the clock's weather reads, in the same section as the clock it sits
+                // beside: it used to be a section of its own, one row under a title called
+                // Weather, while the switch that shows it lived with the clock.
+                Group(stringResource(if (Weather.chosen) R.string.wp_weather_chosen else R.string.wp_weather_guessed)) { note ->
+                    SettingRow(R.string.wp_weather_city, null, note, first = true) { WeatherValue() }
                 }
 
-                Spacer(Modifier.height(22.dp))
+                Spacer(Modifier.height(16.dp))
                 SectionTitle(R.string.wp_screensaver)
                 Group { note ->
                     SettingRow(
                         R.string.ss_kind,
                         when {
+                            // The switch takes the screensaver over; the kind below it waits.
+                            AerialSettings.puzzleSaver -> stringResource(R.string.ss_puzzle_over_hint)
                             Wallpapers.screensaver == ScreensaverMode.Videos -> stringResource(R.string.ss_videos_hint)
                             Wallpapers.screensaver == ScreensaverMode.System -> stringResource(R.string.ss_system_hint)
                             Wallpapers.screensaverFollows -> stringResource(R.string.ss_follow_hint)
-                            AerialSettings.backStartsScreensaver -> stringResource(R.string.ss_back_hint)
+                            AerialSettings.backAction == BackAction.Screensaver -> stringResource(R.string.ss_back_hint)
                             else -> null
                         },
                         note, first = true,
                     ) { ScreensaverChoice(onStartScreensaver) }
-                    // Only the qualities this TV can play; a 1080p-only TV has nothing to choose.
-                    val qualities = remember { AerialFormats.supported(context) }
-                    if (qualities.size > 1) {
-                        // The films kept on the TV (AerialSet, AerialStream): how many, how much
-                        // space at most, and how they change. In place of the quality's own note,
-                        // as a note shows two lines at most.
-                        val keeps = stringResource(
-                            R.string.ss_aerial_keeps,
-                            remember { android.text.format.Formatter.formatShortFileSize(context, AerialStream.keepLimit(context)) },
-                            AerialSet.MAX,
-                        )
-                        Choices(
-                            R.string.ss_quality, keeps, note,
-                            listOf(AerialQuality.Auto to R.string.ss_quality_auto, AerialQuality.Hd to R.string.ss_quality_hd) +
-                                listOf(AerialQuality.Uhd to R.string.ss_quality_uhd, AerialQuality.DolbyVision to R.string.ss_quality_dv)
-                                    .filter { it.first in qualities },
-                            AerialSettings.aerialQuality, AerialSettings::chooseAerialQuality,
-                        )
-                    }
+                    // The puzzle is a switch rather than one of the kinds: on, it plays whatever
+                    // wallpaper Home shows; off, the kind chosen above comes back.
+                    Choices(
+                        R.string.ss_puzzle_saver, stringResource(R.string.ss_puzzle_hint), note,
+                        listOf(true to R.string.st_on, false to R.string.st_off),
+                        AerialSettings.puzzleSaver, AerialSettings::choosePuzzleSaver,
+                    )
                     // The clock screensaver is its clock, and the others show none.
                     if (Wallpapers.screensaver == ScreensaverMode.Aerial || Wallpapers.screensaver == ScreensaverMode.Photos) Choices(
                         R.string.ss_show_time, stringResource(R.string.ss_show_time_hint), note,
@@ -356,25 +371,80 @@ fun WallpaperSheet(
                     } else Choices(
                         R.string.ss_delay, null, note,
                         AerialSettings.screensaverChoices.map {
-                            it to if (it == AerialSettings.NEVER) stringResource(R.string.ss_never) else stringResource(R.string.ss_minutes, it)
+                            it to when {
+                                it == AerialSettings.NEVER -> stringResource(R.string.ss_never)
+                                it < 60 -> stringResource(R.string.ss_seconds, it)
+                                else -> stringResource(R.string.ss_minutes, it / 60)
+                            }
                         },
-                        AerialSettings.screensaverMinutes, AerialSettings::chooseScreensaverMinutes,
+                        AerialSettings.screensaverSeconds, AerialSettings::chooseScreensaverSeconds,
                     )
+                }
+
+                Spacer(Modifier.height(16.dp))
+                SectionTitle(R.string.sec_quality)
+                Group { note ->
+                    // Only the qualities this TV can play; a 1080p-only TV has nothing to choose.
+                    val qualities = remember { AerialFormats.supported(context) }
+                    if (qualities.size > 1) {
+                        // The films kept on the TV (AerialSet, AerialStream): how many, how much
+                        // space at most, and how they change. In place of the quality's own note,
+                        // as a note shows two lines at most.
+                        val keeps = stringResource(
+                            R.string.ss_aerial_keeps,
+                            remember { android.text.format.Formatter.formatShortFileSize(context, AerialStream.keepLimit(context)) },
+                            AerialSet.MAX,
+                        )
+                        Choices(
+                            R.string.ss_quality, keeps, note,
+                            listOf(AerialQuality.Auto to R.string.ss_quality_auto, AerialQuality.Hd to R.string.ss_quality_hd) +
+                                listOf(AerialQuality.Uhd to R.string.ss_quality_uhd, AerialQuality.DolbyVision to R.string.ss_quality_dv)
+                                    .filter { it.first in qualities },
+                            AerialSettings.aerialQuality, AerialSettings::chooseAerialQuality, first = true,
+                        )
+                    }
+                    // How much of Home's own motion this TV draws: the same trade as the films'
+                    // quality above, once about the picture and once about the moving glass. It
+                    // used to share a card with the key sounds, which answer nothing like it
+                    // (the owner, 2026-11-17: 「效果和按键声音放在一起，感觉不合适」).
+                    Choices(
+                        R.string.st_effects,
+                        stringResource(
+                            if (AerialSettings.effects == Effects.Auto && AerialSettings.lowEnd) R.string.st_effects_auto_lite_hint
+                            else R.string.st_effects_hint,
+                        ),
+                        note,
+                        listOf(Effects.Auto to R.string.st_effects_auto, Effects.Full to R.string.st_effects_full, Effects.Lite to R.string.st_effects_lite),
+                        AerialSettings.effects, AerialSettings::chooseEffects,
+                        first = qualities.size <= 1,
+                    )
+                }
+
+                Spacer(Modifier.height(16.dp))
+                SectionTitle(R.string.sec_keys)
+                Group { note ->
+                    // The remote's keys, together: how they sound, and what Back starts.
+                    Choices(
+                        R.string.st_sounds,
+                        stringResource(if (AerialSettings.uiSounds == UiSounds.Tv) R.string.st_sounds_tv_hint else R.string.st_sounds_hint),
+                        note,
+                        listOf(UiSounds.Tv to R.string.st_sounds_tv, UiSounds.Aerial to R.string.st_sounds_aerial, UiSounds.Off to R.string.st_off),
+                        AerialSettings.uiSounds, { AerialSettings.chooseUiSounds(it); Sounds.prepare() }, first = true,
+                    )
+                    // Back on Home's top row starts the screensaver, or does nothing. It read as a
+                    // screensaver setting while it sat in that card, but it is a key doing a thing.
                     Choices(
                         R.string.ss_back, stringResource(R.string.ss_back_choice_hint), note,
-                        listOf(true to R.string.ss_back_on, false to R.string.ss_back_off),
-                        AerialSettings.backStartsScreensaver, AerialSettings::chooseBackStartsScreensaver,
+                        listOf(
+                            BackAction.Screensaver to R.string.ss_back_on,
+                            BackAction.Off to R.string.ss_back_off,
+                        ),
+                        AerialSettings.backAction, AerialSettings::chooseBackAction,
                     )
                 }
 
-                Spacer(Modifier.height(22.dp))
-                SectionTitle(R.string.wp_weather)
-                Group(stringResource(if (Weather.chosen) R.string.wp_weather_chosen else R.string.wp_weather_guessed)) { note ->
-                    SettingRow(R.string.wp_weather_city, null, note, first = true) { WeatherValue() }
-                }
-
-                // One row says what it is; a title over it would only repeat it.
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(16.dp))
+                SectionTitle(R.string.sec_lock)
                 Group(stringResource(R.string.st_pin_hint)) { note ->
                     SettingRow(R.string.st_pin, null, note, first = true) {
                         PinChoice(onPin, onFocused = { scope.launch { scroll.animateScrollTo(scroll.maxValue) } })
@@ -399,6 +469,7 @@ fun WallpaperSheet(
             Spacer(Modifier.width(28.dp))
             PhoneCard(phoneUrl, qr)
         }
+        }
     }
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
@@ -410,7 +481,14 @@ fun WallpaperSheet(
         AnimatedVisibility(
             visibleState = shown,
             enter = fadeIn(tween(200, easing = Motion.EaseOut)) + slideInVertically(tween(380, easing = Motion.Drawer)) { it / 3 },
-            exit = fadeOut(tween(160, easing = Motion.EaseOut)) + slideOutVertically(tween(200, easing = Motion.EaseOut)) { it / 4 },
+            // Out the way it came in: as much distance, as much time. The exit used to travel a
+            // quarter of the sheet in 200 ms on a curve that is fastest at its start, so the part
+            // you could see was over in a few frames and read as a snap beside the 380 ms opening
+            // (the owner, 2026-11-17: 「个性化菜单弹出和收回的流畅度也不一样，弹出更丝滑」). Eased
+            // in, the sheet leaves slowly and gathers speed under the bottom edge; its fade waits
+            // until it is mostly gone instead of washing it out while it moves.
+            exit = fadeOut(tween(120, delayMillis = 200, easing = Motion.EaseOut)) +
+                slideOutVertically(tween(380, easing = Motion.EaseInOut)) { it / 3 },
         ) {
             sheet(true)
         }
@@ -449,33 +527,32 @@ private fun WallpaperRows(takeFocus: Boolean) {
             // With two or more, one card takes turns through all of them, one a day (#27).
             if (photos.size > 1) add(Wallpaper(Wallpapers.ROTATE_PHOTOS, WallpaperKind.Photo, rotateTitle))
             addAll(photos)
-            addAll(items.filter { it.kind == WallpaperKind.Builtin && (it.id in Wallpapers.FEATURED_BUILTINS || it.id == selected) })
-            addAll(items.filter { it.kind == WallpaperKind.Auto })
             // The inputs' pictures last: a choice for a home with a set-top box, not the usual one.
             addAll(items.filter { it.kind == WallpaperKind.Source })
         }
     }
     var note by remember { mutableStateOf<String?>(null) }
     // A row clips to its bounds, and the focused card grows by 8%: room on the left for that,
-    // with the row moved back by as much so the cards still line up with the titles.
+    // with the row moved back by as much so the cards still line up with the titles. The room,
+    // the gap and the offset are the card's own at two thirds (see WallpaperCard).
     LazyRow(
-        modifier = Modifier.offset(x = (-10).dp).drawWithContent {
+        modifier = Modifier.offset(x = (-7).dp).drawWithContent {
             // Keep the cards out of the phone column on old GPUs (#557), independently of the
             // scroll layer's clip. Leave vertical room for the focused card's 8% zoom.
-            val focusRoom = 16.dp.toPx()
+            val focusRoom = 11.dp.toPx()
             clipRect(top = -focusRoom, bottom = size.height + focusRoom) {
                 this@drawWithContent.drawContent()
             }
         },
-        horizontalArrangement = Arrangement.spacedBy(18.dp),
-        contentPadding = PaddingValues(start = 14.dp, end = 24.dp, top = 6.dp, bottom = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(start = 9.dp, end = 16.dp, top = 6.dp, bottom = 4.dp),
     ) {
         items(list, key = { it.id }) { wp ->
             val hint = wallpaperNote(wp)
             WallpaperCard(wp, if (wp === list.first()) first else null, onFocused = { note = hint })
         }
     }
-    Box(Modifier.height(42.dp).padding(start = 4.dp, top = 8.dp)) {
+    Box(Modifier.height(28.dp).padding(start = 4.dp, top = 8.dp)) {
         note?.let { BasicText(it, style = Type.Caption.copy(color = Palette.TertiaryLabel), maxLines = 2, overflow = TextOverflow.Ellipsis) }
     }
 }
@@ -487,27 +564,31 @@ private fun wallpaperNote(wp: Wallpaper): String? = when {
     wp.id == Wallpapers.VIDEOS -> stringResource(R.string.wp_videos_note)
     wp.kind == WallpaperKind.Video -> stringResource(R.string.wp_video_note)
     wp.kind == WallpaperKind.Source -> stringResource(R.string.wp_source_note)
-    wp.id == Wallpapers.LATEST_DAILY -> stringResource(R.string.wp_daily_note)
     wp.id == Wallpapers.ROTATE_PHOTOS -> stringResource(R.string.wp_photos_rotate_note)
     wp.kind == WallpaperKind.Photo -> stringResource(R.string.wp_photo_note)
-    wp.kind == WallpaperKind.Auto -> stringResource(R.string.wp_auto_note)
     wp.kind == WallpaperKind.Daily -> wp.caption
     else -> null
 }
 
-private val CardCorner = 12.dp
+// The wallpaper card and everything on it, at two thirds like the sheet's words (the owner:
+// 「个性化壁纸下的两个大图标也缩小到2/3」). dp does not follow the sheet's fontScale, so these
+// are the numbers themselves.
+private val CardCorner = 8.dp
+private val CardW = 112.dp
+private val CardH = 63.dp
 
 @Composable
 private fun WallpaperCard(wp: Wallpaper, focusRequester: FocusRequester?, onFocused: () -> Unit) {
     val selected = Wallpapers.selectedId == wp.id
     // A moving wallpaper's card is made again when the frame it stopped on changes, also while the
-    // sheet is open: the film stopped as the sheet opened is decoded seconds later (Xiaomi MiTV-MFTR0).
+    // sheet is open: the film stopped as the sheet opened is decoded seconds later (Xiaomi
+    // MiTV-MFTR0).
     val picture = if (wp.kind == WallpaperKind.Live || wp.kind == WallpaperKind.Video) Wallpapers.pictureVersion else 0
     // The picture is cut to the card's continuous outline once, at the size it is drawn, so the
     // card is one image draw and nothing is clipped (see SmoothCorners.kt).
     val density = LocalDensity.current
-    val cardW = with(density) { 168.dp.roundToPx() }
-    val cardH = with(density) { 94.dp.roundToPx() }
+    val cardW = with(density) { CardW.roundToPx() }
+    val cardH = with(density) { CardH.roundToPx() }
     val corner = with(density) { CardCorner.toPx() }
     val thumb by produceState<ImageBitmap?>(null, wp.id, Wallpapers.items, picture, cardW, cardH) {
         value = withContext(Dispatchers.Default) {
@@ -516,13 +597,13 @@ private fun WallpaperCard(wp: Wallpaper, focusRequester: FocusRequester?, onFocu
     }
     Pressable(onClick = { Wallpapers.select(wp.id) }, focusRequester = focusRequester, focusedScale = 1.08f) { state ->
         LaunchedEffect(state.focused) { if (state.focused) onFocused() }
-        Column(Modifier.width(168.dp)) {
+        Column(Modifier.width(CardW)) {
             Box(
                 Modifier
-                    .size(168.dp, 94.dp)
+                    .size(CardW, CardH)
                     .smoothBackground(if (thumb == null) Palette.Fill else Color.Transparent, CardCorner)
                     .smoothBorder(
-                        if (state.focused || selected) 3.dp else 1.dp,
+                        if (state.focused || selected) 2.dp else 1.dp,
                         when {
                             state.focused -> Palette.Focus
                             selected -> Palette.Focus.copy(alpha = 0.55f)
@@ -538,20 +619,20 @@ private fun WallpaperCard(wp: Wallpaper, focusRequester: FocusRequester?, onFocu
                 }
                 if (selected) {
                     Box(
-                        Modifier.align(Alignment.TopEnd).padding(7.dp).size(22.dp).clip(CircleShape).background(Palette.Focus),
+                        Modifier.align(Alignment.TopEnd).padding(5.dp).size(15.dp).clip(CircleShape).background(Palette.Focus),
                         contentAlignment = Alignment.Center,
-                    ) { GlyphIcon(Glyph.Check, Palette.OnFocus, 13.dp) }
+                    ) { GlyphIcon(Glyph.Check, Palette.OnFocus, 9.dp) }
                 }
                 // The aerial wallpaper moves; its card shows the last frame it stopped on.
                 if (wp.kind == WallpaperKind.Live || wp.kind == WallpaperKind.Video) {
-                    GlyphIcon(Glyph.Play, Color.White, 22.dp, Modifier.align(Alignment.BottomStart).padding(7.dp))
+                    GlyphIcon(Glyph.Play, Color.White, 15.dp, Modifier.align(Alignment.BottomStart).padding(5.dp))
                 }
                 // An input's picture cannot be copied for a card: its mark over the dark picture.
                 if (wp.kind == WallpaperKind.Source) {
-                    GlyphIcon(Glyph.Hdmi, Color.White, 34.dp, Modifier.align(Alignment.Center))
+                    GlyphIcon(Glyph.Hdmi, Color.White, 23.dp, Modifier.align(Alignment.Center))
                 }
             }
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(4.dp))
             BasicText(
                 wp.title, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 style = Type.Caption.copy(color = if (state.focused) Palette.Label else Palette.SecondaryLabel),
@@ -563,7 +644,7 @@ private fun WallpaperCard(wp: Wallpaper, focusRequester: FocusRequester?, onFocu
 @Composable
 private fun SectionTitle(title: Int) {
     BasicText(stringResource(title), style = Type.Headline, modifier = Modifier.padding(start = 4.dp))
-    Spacer(Modifier.height(10.dp))
+    Spacer(Modifier.height(8.dp))
 }
 
 /**
@@ -597,7 +678,7 @@ private fun Group(note: String? = null, rows: @Composable ColumnScope.(note: (St
                 .smoothBackground(Color.White.copy(alpha = 0.05f), 16.dp)
                 .onFocusChanged { inside = it.hasFocus },
         ) { rows { focusedNote = it } }
-        Box(Modifier.height(38.dp).padding(start = 16.dp, top = 7.dp)) {
+        Box(Modifier.height(30.dp).padding(start = 16.dp, top = 5.dp)) {
             (if (inside) focusedNote ?: note else note)?.let {
                 BasicText(it, style = Type.Caption.copy(color = Palette.TertiaryLabel), maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
@@ -607,17 +688,25 @@ private fun Group(note: String? = null, rows: @Composable ColumnScope.(note: (St
 
 /** One row: the setting's name on the left, its control on the right, a hairline above all but the first. */
 @Composable
-private fun SettingRow(label: Int, hint: String?, note: (String?) -> Unit, first: Boolean = false, control: @Composable () -> Unit) {
+private fun SettingRow(label: Int, hint: String?, note: (String?) -> Unit, first: Boolean = false, control: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit) {
     if (!first) Box(Modifier.padding(start = 18.dp).fillMaxWidth().height(1.dp).background(Palette.Hairline))
     Row(
         Modifier
             .fillMaxWidth()
-            .height(58.dp)
+            .height(44.dp)
             .padding(start = 18.dp, end = 10.dp)
             .onFocusChanged { if (it.hasFocus) note(hint) },
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        BasicText(stringResource(label), style = Type.Body, modifier = Modifier.weight(1f), maxLines = 1)
+        // The label keeps a third of the row: the chips scroll within their own share, so a two
+        // character label is never squeezed down to its first character (类型 read as 类).
+        BasicText(
+            stringResource(label),
+            style = Type.Body,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
         control()
     }
 }
@@ -634,9 +723,27 @@ private fun <T> Choices(
     first: Boolean = false,
 ) {
     SettingRow(label, hint, note, first) {
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            options.forEach { (value, text) ->
-                Chip(if (text is Int) stringResource(text) else text.toString(), on = current == value) { choose(value) }
+        // A choice with many options (the screensaver's kinds, the sounds) overflows the row: the
+        // pills scroll sideways, and moving the focus onto one brings it into view. The scroll
+        // row takes at most its weighted share, so the label beside it keeps its room.
+        Row(
+            // The pills are laid out at the row's end, however few of them there are (the owner:
+            // 「有的是左对齐，有的是右对齐，我希望全都右对齐」). The scroll row inside is only as
+            // wide as its pills — or, when they overflow the share, as wide as the share, and
+            // scrolls; either way it sits at the end.
+            Modifier.weight(2.2f),
+            horizontalArrangement = Arrangement.End,
+        ) {
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+                // The pills carry 8dp of invisible drawing room each (see Chip), so no gap of their
+                // own here: 8 + 8 between two pills is the spacing the row used to show.
+                horizontalArrangement = Arrangement.spacedBy(0.dp),
+            ) {
+                options.forEach { (value, text) ->
+                    Chip(if (text is Int) stringResource(text) else text.toString(), on = current == value) { choose(value) }
+                }
             }
         }
     }
@@ -645,8 +752,8 @@ private fun <T> Choices(
 /** Parental PIN on or off; either way goes through the PIN pad (issue #10). */
 @Composable
 private fun PinChoice(onPin: (on: Boolean) -> Unit, onFocused: () -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        listOf(false to R.string.st_pin_off, true to R.string.st_pin_on).forEach { (on, label) ->
+    Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
+        listOf(true to R.string.st_pin_on, false to R.string.st_pin_off).forEach { (on, label) ->
             Chip(stringResource(label), on = AerialSettings.pinSet == on, onFocused = onFocused) {
                 if (AerialSettings.pinSet != on) onPin(on)
             }
@@ -694,9 +801,14 @@ private fun Chip(label: String, on: Boolean, onFocused: (() -> Unit)? = null, on
         )
         val fg = if (state.focused) Palette.OnFocus else Palette.Label
         Row(
-            Modifier.clip(RoundedCornerShape(50)).drawBehind { drawRect(bg) }.height(40.dp).padding(horizontal = 20.dp),
+            // The pill is drawn 8dp inside the focusable's bounds: focused, it is drawn 3% larger
+            // (6dp and more on a wide pill), and at the ends of a scrollable row of these the
+            // bounds sit on the clip — the zoom used to be shaved off both sides of the pill.
+            // The padding is outside the drawn pill, so the pill itself is as it was.
+            Modifier.padding(horizontal = 8.dp)
+                .clip(RoundedCornerShape(50)).drawBehind { drawRect(bg) }.height(30.dp).padding(horizontal = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             if (on) GlyphIcon(Glyph.Check, fg, 14.dp)
             BasicText(label, style = Type.Body.copy(color = fg))
@@ -711,7 +823,10 @@ private fun ActionChip(label: String, glyph: Glyph, onClick: () -> Unit) {
         val bg by animateColorAsState(if (state.focused) Palette.Focus else Palette.FillStrong, tween(140, easing = Motion.EaseOut), label = "action-bg")
         val fg = if (state.focused) Palette.OnFocus else Palette.Label
         Row(
-            Modifier.clip(RoundedCornerShape(50)).drawBehind { drawRect(bg) }.height(40.dp).padding(start = 20.dp, end = 14.dp),
+            // Same 8dp of drawing room as Chip has (see there): focused, the pill's zoom must not
+            // run past the row's clip.
+            Modifier.padding(horizontal = 8.dp)
+                .clip(RoundedCornerShape(50)).drawBehind { drawRect(bg) }.height(30.dp).padding(start = 14.dp, end = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
@@ -722,26 +837,43 @@ private fun ActionChip(label: String, glyph: Glyph, onClick: () -> Unit) {
 }
 
 @Composable
-private fun ScreensaverChoice(onStart: () -> Unit) {
-    // The choice first, then the action that tries it.
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        listOf(
-            ScreensaverMode.Aerial to R.string.ss_aerial,
-            ScreensaverMode.Photos to R.string.ss_photos,
-            ScreensaverMode.Clock to R.string.ss_clock,
-            ScreensaverMode.Videos to R.string.ss_videos,
-            ScreensaverMode.System to R.string.ss_system,
-        ).forEach { (mode, label) ->
-            Chip(stringResource(label), on = Wallpapers.screensaver == mode) { Wallpapers.chooseScreensaver(mode) }
+private fun androidx.compose.foundation.layout.RowScope.ScreensaverChoice(onStart: () -> Unit) {
+    // The choice first, then the action that tries it. The chips scroll within their own share of
+    // the row, so they never squeeze the label beside them down to a single character (the owner:
+    // 类型 read as 类).
+    // The whole control takes half the row ([weight]), so the label beside it keeps its room;
+    // inside it the chips scroll within their own share, and the start button stays put.
+    Row(
+        // As Choices: the pills and the start button sit at the row's end.
+        Modifier.weight(1f),
+        horizontalArrangement = Arrangement.End,
+    ) {
+        Row(
+            // fill = false: as wide as its chips when they fit, else the room left beside the
+            // start button (the weighted child is measured after the plain ones), and scrolls.
+            Modifier.weight(1f, fill = false).horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(0.dp),
+        ) {
+            listOf(
+                ScreensaverMode.Aerial to R.string.ss_aerial,
+                ScreensaverMode.Photos to R.string.ss_photos,
+                ScreensaverMode.Clock to R.string.ss_clock,
+                ScreensaverMode.Videos to R.string.ss_videos,
+                ScreensaverMode.System to R.string.ss_system,
+            ).forEach { (mode, label) ->
+                Chip(stringResource(label), on = Wallpapers.screensaver == mode) { Wallpapers.chooseScreensaver(mode) }
+            }
         }
         Spacer(Modifier.width(6.dp))
         Pressable(onClick = onStart, focusedScale = 1.06f) { state ->
             val bg by animateColorAsState(if (state.focused) Palette.Focus else Palette.FillStrong, tween(140, easing = Motion.EaseOut), label = "ss-start")
             val fg = if (state.focused) Palette.OnFocus else Palette.Label
             Row(
-                Modifier.clip(RoundedCornerShape(50)).drawBehind { drawRect(bg) }.height(40.dp).padding(horizontal = 20.dp),
+                Modifier.padding(horizontal = 8.dp)
+                    .clip(RoundedCornerShape(50)).drawBehind { drawRect(bg) }.height(30.dp).padding(horizontal = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 GlyphIcon(Glyph.Play, fg, 14.dp)
                 BasicText(stringResource(R.string.ss_start), style = Type.Body.copy(color = fg))
@@ -777,6 +909,9 @@ private fun PhoneCard(url: String?, qr: ImageBitmap?) {
         }
     }
 }
+
+/** Print at two thirds in the sheet; see the sheet's own note. */
+private const val TextScale = 2f / 3f
 
 private val SheetHeight = 360.dp
 private val SheetCorner = 30.dp

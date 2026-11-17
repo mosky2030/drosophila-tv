@@ -16,6 +16,7 @@ import app.orchard.tv.apps.AppEntry
 import app.orchard.tv.apps.AppNames
 import app.orchard.tv.apps.LayoutOps
 import app.orchard.tv.apps.CustomIcons
+import app.orchard.tv.apps.PuzzleTile
 import app.orchard.tv.apps.IconLibrary
 import app.orchard.tv.apps.SourceLooks
 import app.orchard.tv.apps.FOLDER_KEY_PREFIX
@@ -26,6 +27,7 @@ import app.orchard.tv.apps.TileArtFactory
 import app.orchard.tv.apps.folderEntry
 import app.orchard.tv.apps.sourceEntry
 import app.orchard.tv.settings.AerialSettings
+import app.orchard.tv.settings.IconStyle
 import app.orchard.tv.settings.Restricted
 import app.orchard.tv.system.XgimiBoost
 import app.orchard.tv.system.Brightness
@@ -67,7 +69,7 @@ sealed interface Overlay {
     data object Kids : Overlay
 }
 
-enum class CcPage { Main, Inputs, InputSettings, Update, Setup }
+enum class CcPage { Main, Inputs, InputSettings, Setup }
 
 /**
  * Tiles a cold start reads whole before showing Home (two rows and a half, as many as can show);
@@ -193,12 +195,23 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         CustomIcons.onChange(customIconsChanged)
         // Library pictures that arrived, or the library turned on or off.
         viewModelScope.launch { snapshotFlow { IconLibrary.version }.drop(1).collect { reload() } }
+        // Another look for every icon (原图标 / 磨砂玻璃 / 多巴胺): the artwork itself is drawn
+        // again, and its cache key carries the look, so nothing old is reused.
+        viewModelScope.launch { snapshotFlow { AerialSettings.iconLook }.drop(1).collect { reload() } }
         offerSetupOnce()
         // An input's device or name, chosen from its tile's menu or the phone page.
         viewModelScope.launch { snapshotFlow { SourceLooks.all }.drop(1).collect { if (loaded) arrange() } }
         // An app renamed on the phone page.
         viewModelScope.launch { snapshotFlow { AppNames.all }.drop(1).collect { if (loaded) arrange() } }
         viewModelScope.launch { snapshotFlow { AerialSettings.previewApps }.drop(1).collect { if (loaded) arrange() } }
+        // Another icon style: the dock draws folders square, so every folder's picture is made
+        // again at its other shape (and the dock's faces at their own size, which arrange leads to).
+        viewModelScope.launch {
+            snapshotFlow { AerialSettings.iconStyle }.drop(1).collect {
+                folderArt.clear()
+                if (loaded) { arrange(); prepareFaces() }
+            }
+        }
         // Into or out of Kids and Elders mode, or its tiles chosen: another Home.
         viewModelScope.launch {
             snapshotFlow { listOf(Restricted.active, Restricted.enabled, Restricted.allowed, overlay == Overlay.Kids, AerialSettings.pinSet) }.drop(1).collect {
@@ -309,8 +322,11 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun prepareFaces(entries: List<AppEntry>, focused: Boolean = false) {
         val dm = context.resources.displayMetrics
+        // The dock's square icons are sized by how many of them are on it: the list handed in holds
+        // the folders' apps too, so Home's own count is passed alongside.
+        val dockCount = apps.count { !it.art.placeholder }
         withContext(Dispatchers.Default) {
-            TileFaces.prepare(entries.map { it.art }.filterNot { it.placeholder }, dm.widthPixels, canvasDensity(dm), focused)
+            TileFaces.prepare(entries.map { it.art }.filterNot { it.placeholder }, dm.widthPixels, canvasDensity(dm), focused, dockCount)
         }
     }
 
@@ -370,30 +386,48 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         // Names typed on the phone page stand in for the apps' own, everywhere Home shows one.
         val named = all.map { e -> AppNames.of(e.key)?.let { e.copy(label = it) } ?: e }
         val arrangement = store.arrange(named + pinned) { folder, inside ->
-            val shown = inside.take(9).map { it.art }
-            val art = folderArt[folder.id]?.takeIf { (made, _) -> made.size == shown.size && made.indices.all { made[it] === shown[it] } }?.second
-                ?: TileArtFactory.forFolder(shown).also { folderArt[folder.id] = shown to it }
+            // A folder on the dock is a square, and only its middle square is shown: four apps in
+            // two rows fit there whole, where six had their outer columns cut off by the crop.
+            // The Hidden style's board shows the same square tiles (the owner, 2026-11-17: the
+            // folder's mini icons were cut off at the sides by the 16:9 crop — 2×2 small squares
+            // instead: 「文件夹内小图标改小正方形2*2放置」).
+            val square = (AerialSettings.iconStyle == IconStyle.Dock || AerialSettings.iconStyle == IconStyle.Wheel ||
+                AerialSettings.iconStyle == IconStyle.Hidden) && !Restricted.active
+            val key = if (square) folder.id + ":square" else folder.id
+            val shown = inside.take(if (square) 4 else 9).map { it.art }
+            val art = folderArt[key]?.takeIf { (made, _) -> made.size == shown.size && made.indices.all { made[it] === shown[it] } }?.second
+                // The folder's id seeds its plate, so a group keeps the same color and the same
+                // window of glass whatever happens around it.
+                ?: TileArtFactory.forFolder(shown, square, folder.id.hashCode()).also { folderArt[key] = shown to it }
             folderEntry(folder, art)
         }
+        // The puzzle game is a real entry, after the user's own tiles — and hidden until the owner
+        // brings it back from 隐藏的 App, where it now starts (the owner: 「把拼图APP图标默认放在
+        // 隐藏app里」). Hidden, it is still listed there, so it can always be had again.
+        val puzzle = PuzzleTile.entry()
+        val puzzleHidden = store.isHidden(PuzzleTile.KEY)
+        val home = applyPlacements(arrangement.home + if (puzzleHidden) emptyList() else listOf(puzzle))
+        val kept = arrangement.hidden + if (puzzleHidden) listOf(puzzle) else emptyList()
+        val folders = arrangement.folders
         // With a PIN set the phone page can set the mode up too.
         val kids = Restricted.enabled || overlay == Overlay.Kids || AerialSettings.pinSet
         kidsCandidates = if (!kids) emptyList() else {
             val unpinned = shownSources.filter { it.id !in AerialSettings.pinnedSources }.map { sourceEntry(context, it) }
-            arrangement.home.flatMap { e -> e.folder?.let { arrangement.folders[it.id].orEmpty() } ?: listOf(e) } +
-                arrangement.hidden + unpinned
+            home.flatMap { e -> e.folder?.let { folders[it.id].orEmpty() } ?: listOf(e) } +
+                kept + unpinned
         }
         AppCatalog.kidsCandidates = kidsCandidates
         if (kids) noteKidsPackages()
         apps = when {
             Restricted.active -> Restricted.allowed.mapNotNull { key -> kidsCandidates.firstOrNull { it.key == key } }
-            else -> AerialSettings.previewApps.takeIf { it > 0 }?.let { arrangement.home.take(it) } ?: arrangement.home
+            else -> AerialSettings.previewApps.takeIf { it > 0 }?.let { home.take(it) } ?: home
         }
-        AppCatalog.home = arrangement.home
-        AppCatalog.folderApps = arrangement.folders
-        AppCatalog.hiddenApps = arrangement.hidden
-        AppCatalog.folders = arrangement.home.filter { it.folder != null }
-        folderApps = arrangement.folders
-        hiddenApps = arrangement.hidden
+        AppCatalog.home = home
+        AppCatalog.folderApps = folders
+        AppCatalog.hiddenApps = kept
+        AppCatalog.folders = home.filter { it.folder != null }
+        folderApps = folders
+        hiddenApps = kept
     }
 
     /** Each input intent's player package, by the intent's URI: resolving it is a PackageManager query. */
@@ -465,6 +499,7 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     fun ungroup(id: String) {
         store.ungroup(id)
         folderArt.remove(id)
+        folderArt.remove(id + ":square")
         arrange()
     }
 
@@ -681,8 +716,44 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         if (from < 0) return
         val to = (from + delta).coerceIn(0, list.lastIndex)
         if (to == from) return
-        if (folder != null) store.moveInFolder(key, list[to].key) else store.move(key, list[to].key)
+        if (folder != null) {
+            store.moveInFolder(key, list[to].key)
+        } else {
+            val target = list[to].key
+            // Tiles the store does not hold — the puzzle tile, the demo tiles, which arrange()
+            // makes up and leaves no trace of — cannot move through it: it finds neither key and
+            // does nothing, so on a row of them (the wheel over the demo tiles) nothing moved
+            // however the keys pressed. These keep their places in memory instead, beside
+            // whatever tile they were moved onto, for as long as this Home runs.
+            if (store.holds(key) && store.holds(target)) store.move(key, target)
+            else synthPlacements[key] = target to (delta > 0)
+        }
         arrange()
+    }
+
+    /**
+     * The in-memory places of tiles the store does not hold: tile key -> the anchor key it sits
+     * beside, after it ([Pair.second]) or before it. Applied in [arrange], saved nowhere.
+     */
+    private val synthPlacements = LinkedHashMap<String, Pair<String, Boolean>>()
+
+    private fun applyPlacements(list: List<AppEntry>): List<AppEntry> {
+        if (synthPlacements.isEmpty()) return list
+        var out = list
+        for ((key, at) in synthPlacements) {
+            val tile = out.firstOrNull { it.key == key } ?: continue
+            val anchor = out.indexOfFirst { it.key == at.first }
+            if (anchor < 0) continue
+            // The anchor's place must be retaken after the tile is pulled out: the tile pulled
+            // from before the anchor shifts the anchor a place left, and adding back at the old
+            // index then fell past the list's end (crash: IndexOutOfBoundsException, the folder
+            // moved onto the puzzle tile that came after it).
+            val rest = out.filter { it.key != key }
+            val anchorRest = rest.indexOfFirst { it.key == at.first }
+            if (anchorRest < 0) continue
+            out = rest.toMutableList().apply { add(anchorRest + if (at.second) 1 else 0, tile) }
+        }
+        return out
     }
 
     fun endMove() { movingKey = null; movingInFolder = null }

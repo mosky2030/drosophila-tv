@@ -20,14 +20,18 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.ShaderBrush
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asAndroidPath
@@ -39,6 +43,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.createBitmap
@@ -60,8 +65,25 @@ import kotlin.math.roundToInt
  * The continuous outline is a baked mask (see SmoothCorners.kt); children are clipped to a plain
  * rounded rect, which holds it. [seeThroughFilm]: nothing but the film lies under the panel, which
  * over a film without frames (Wallpapers.filmGlassless) is then see-through like the plate.
+ * [litePicture]: Lite draws the frosted picture itself where the panel lies, not its average
+ * colour — see the branch below.
  */
-fun Modifier.liquidGlass(corner: Dp, bottomCorners: Boolean = true, seeThroughFilm: Boolean = false): Modifier = composed {
+fun Modifier.liquidGlass(
+    corner: Dp,
+    bottomCorners: Boolean = true,
+    seeThroughFilm: Boolean = false,
+    litePicture: Boolean = false,
+    /** A lift toward white, strongest at the top, over the glass: the plate reads lighter without
+     *  losing the picture under it, so a panel keeps its frosted-glass look over a dark wallpaper
+     *  (the owner: 「设置菜单和个性化菜单的颜色似乎变深了，以前是透明模糊玻璃效果」). */
+    milk: Float = 0f,
+    /** A brighter dim of the picture than [PanelTint], for panels that must read as glass over
+     *  dark wallpapers too: ×0.48 left the control centre a brown slab on one (owner, again). */
+    tint: ColorFilter? = null,
+    /** The pale, white frosted material used by Control Center. Its solid fallbacks are light too,
+     *  so a film without frames or a wallpaper not yet loaded cannot flash a dark slab back in. */
+    light: Boolean = false,
+): Modifier = composed {
     // The glass a panel opened with stays while it is open, unless the wallpaper itself changes
     // (chosen in Personalize). A moving film that stops as a panel opens gets its glass made again
     // twice within the next second or so, from a frame near where it stopped and then from that
@@ -78,6 +100,7 @@ fun Modifier.liquidGlass(corner: Dp, bottomCorners: Boolean = true, seeThroughFi
     // decoded in the app where the film was let go, which the film goes on from (owner, TCL
     // MT5879, issue #1238). Solid only until a picture exists.
     val solid = Wallpapers.moves() && Wallpapers.filmGlassless && Wallpapers.frosted == null
+    val panelTint = tint ?: PanelTint
     // Where the film's frames cannot be had otherwise, the latest glass of the moving film, decoded
     // in the app (Wallpapers.filmFrost), over the picture's, which may be another shot.
     val latest = (if (Wallpapers.moves() && Wallpapers.filmGlassless) Wallpapers.filmFrost ?: Wallpapers.frosted else Wallpapers.frosted)
@@ -113,18 +136,29 @@ fun Modifier.liquidGlass(corner: Dp, bottomCorners: Boolean = true, seeThroughFi
             var drawnT = -1f
             onDrawBehind {
                 if (solid) {
-                    drawImage(flat, dstSize = IntSize(w, h), colorFilter = ColorFilter.tint(if (seeThroughFilm) FilmGlass else FilmPanel))
+                    val solidGlass = if (light) {
+                        if (seeThroughFilm) FilmGlassLight else FilmPanelLight
+                    } else if (seeThroughFilm) FilmGlass else FilmPanel
+                    drawImage(flat, dstSize = IntSize(w, h), colorFilter = ColorFilter.tint(solidGlass))
                     if (seeThroughFilm) drawImage(filmSheen, dstSize = IntSize(w, h), filterQuality = FilterQuality.Low)
                     drawGlassEdge(size, radius, bottomCorners)
                 } else if (shader == null || brush == null || root == IntSize.Zero) {
-                    drawImage(flat, dstSize = IntSize(w, h), colorFilter = ColorFilter.tint(Palette.Glass))
+                    drawImage(flat, dstSize = IntSize(w, h), colorFilter = ColorFilter.tint(if (light) GlassLight else Palette.Glass))
                     drawGlassEdge(size, radius, bottomCorners)
                 } else if (AerialSettings.lite) {
                     // Lite (AerialSettings.lite): one solid color, the frosted wallpaper's average as
                     // the glass would dim it, without the layer the glass needs every frame, which
                     // weak GPUs feel most while a panel slides in. Solid: the plain glass color is
                     // see-through and showed the tiles under the Personalize sheet.
-                    drawImage(flat, dstSize = IntSize(w, h), colorFilter = ColorFilter.tint(liteGlass(frost)))
+                    drawImage(flat, dstSize = IntSize(w, h), colorFilter = ColorFilter.tint(if (light) GlassLight else liteGlass(frost)))
+                    // Its average has nothing left of the picture in it: a plate of one colour reads
+                    // as a slab of glass, not as glass (the owner: "模糊太狠了，看不出毛玻璃"). The
+                    // frosted picture where the panel lies has the wallpaper's shapes in it, and one
+                    // textured rect costs what the flat fill did — no layer, so Lite keeps its point.
+                    // Opened up from PanelTint, so more of the picture shows through.
+                    if (litePicture && root != IntSize.Zero) {
+                        drawFrostWithin(frost, at, root, size, LitePictureTint)
+                    }
                     drawGlassEdge(size, radius, bottomCorners)
                 } else {
                     val t = swap()
@@ -146,15 +180,22 @@ fun Modifier.liquidGlass(corner: Dp, bottomCorners: Boolean = true, seeThroughFi
                             if (underShader != null && under != null && t < 1f) {
                                 // A new frosted picture fades in over the old within the outline.
                                 place(underShader, under)
-                                drawRect(ShaderBrush(underShader), colorFilter = PanelTint, blendMode = BlendMode.SrcIn)
-                                drawRect(brush, alpha = t, colorFilter = PanelTint, blendMode = BlendMode.SrcAtop)
+                                drawRect(ShaderBrush(underShader), colorFilter = panelTint, blendMode = BlendMode.SrcIn)
+                                drawRect(brush, alpha = t, colorFilter = panelTint, blendMode = BlendMode.SrcAtop)
                             } else {
-                                drawRect(brush, colorFilter = PanelTint, blendMode = BlendMode.SrcIn)
+                                drawRect(brush, colorFilter = panelTint, blendMode = BlendMode.SrcIn)
                             }
                             drawGlassEdge(size, radius, bottomCorners)
                         }
                     }
                     drawLayer(glass)
+                }
+                if (milk > 0f) {
+                    drawRect(
+                        Brush.verticalGradient(
+                            listOf(Color.White.copy(alpha = milk), Color.White.copy(alpha = milk * 0.35f)),
+                        ),
+                    )
                 }
             }
         }
@@ -253,6 +294,110 @@ private fun liteGlass(frost: ImageBitmap): Color = synchronized(liteColors) {
 private val liteColors = java.util.WeakHashMap<ImageBitmap, Color>()
 
 /**
+ * The part of the frosted picture that lies behind a panel, drawn in the panel's own box: a plate
+ * of the wallpaper's own shapes rather than one colour, which is what makes it read as glass.
+ * [at] and [root] place the panel in the screen the picture covers; [tint] dims it (see [PanelTint]).
+ */
+private fun DrawScope.drawFrostWithin(frost: ImageBitmap, at: Offset, root: IntSize, size: Size, tint: ColorFilter) {
+    val sx = frost.width.toFloat() / root.width
+    val sy = frost.height.toFloat() / root.height
+    val x0 = (at.x * sx).roundToInt().coerceIn(0, frost.width - 1)
+    val y0 = (at.y * sy).roundToInt().coerceIn(0, frost.height - 1)
+    val x1 = ((at.x + size.width) * sx).roundToInt().coerceIn(x0 + 1, frost.width)
+    val y1 = ((at.y + size.height) * sy).roundToInt().coerceIn(y0 + 1, frost.height)
+    drawImage(
+        image = frost,
+        srcOffset = IntOffset(x0, y0),
+        srcSize = IntSize(x1 - x0, y1 - y0),
+        dstSize = IntSize(size.width.roundToInt().coerceAtLeast(1), size.height.roundToInt().coerceAtLeast(1)),
+        colorFilter = tint,
+        // The picture is 320 px wide and stretched over the screen: smooth is what a blur looks like.
+        filterQuality = FilterQuality.Low,
+    )
+}
+
+/**
+ * A plate of glass drawn straight into a Canvas, where [rect] lies on the screen ([root]): the
+ * frosted picture there, [tint]ed, inside [corner], lifted [milk] of the way to white — and, where
+ * [edge] is given, finished with the lit rim of a pane ([glassEdge]). Home's dock bar and the
+ * full-screen clock's digits are glass this way: they are not composables of their own size, and
+ * [liquidGlass]'s shader-and-layer machinery would be a layer each for a shape that moves.
+ */
+fun DrawScope.drawFrostRect(
+    frost: ImageBitmap,
+    rect: Rect,
+    root: IntSize,
+    corner: Float,
+    tint: ColorFilter = PanelTint,
+    milk: Float = 0f,
+    edge: Float = 0f,
+) {
+    if (root.width <= 0 || root.height <= 0 || rect.width < 1f || rect.height < 1f) return
+    val sx = frost.width.toFloat() / root.width
+    val sy = frost.height.toFloat() / root.height
+    val x0 = (rect.left * sx).roundToInt().coerceIn(0, frost.width - 1)
+    val y0 = (rect.top * sy).roundToInt().coerceIn(0, frost.height - 1)
+    val x1 = (rect.right * sx).roundToInt().coerceIn(x0 + 1, frost.width)
+    val y1 = (rect.bottom * sy).roundToInt().coerceIn(y0 + 1, frost.height)
+    val w = rect.width.roundToInt().coerceAtLeast(1)
+    val h = rect.height.roundToInt().coerceAtLeast(1)
+    val at = IntOffset(rect.left.roundToInt(), rect.top.roundToInt())
+    clipPath(Path().apply { addRoundRect(RoundRect(rect, corner, corner)) }) {
+        drawImage(
+            image = frost,
+            srcOffset = IntOffset(x0, y0),
+            srcSize = IntSize(x1 - x0, y1 - y0),
+            dstOffset = at,
+            dstSize = IntSize(w, h),
+            colorFilter = tint,
+            // Small picture stretched over the screen: smooth is what a blur looks like.
+            filterQuality = FilterQuality.Low,
+        )
+        // The milky body over the picture's own light and shade, lighter at the top as a pane
+        // catching the room's light.
+        if (milk > 0f) {
+            drawRect(
+                brush = Brush.verticalGradient(
+                    listOf(Color.White.copy(alpha = milk), Color.White.copy(alpha = milk * 0.62f)),
+                    startY = rect.top,
+                    endY = rect.bottom,
+                ),
+                topLeft = rect.topLeft,
+                size = rect.size,
+            )
+        }
+    }
+    if (edge > 0f) {
+        drawImage(glassEdge(w, h, corner, edge), dstOffset = at, dstSize = IntSize(w, h))
+    }
+}
+
+/**
+ * The dock's glass: the picture at a little over half its light and lifted, so a photo reads
+ * through it as milk rather than as a grey slab, and the icons sit on something lighter than the
+ * wallpaper behind them.
+ */
+internal val DockGlassTint = ColorFilter.colorMatrix(ColorMatrix(floatArrayOf(
+    0.58f, 0f, 0f, 0f, 20f,
+    0f, 0.58f, 0f, 0f, 20f,
+    0f, 0f, 0.58f, 0f, 20f,
+    0f, 0f, 0f, 1f, 0f,
+)))
+
+/**
+ * [PanelTint] opened up for the plate that shows the picture itself: 0.62 of its light and 10 of
+ * lift, against 0.48 and 14. The average colour is flat, and a flat plate can be as dark as it
+ * likes and still read as a slab; the picture's own light and shade carry the glass, so it can be
+ * given more of the wallpaper (the owner: the plate's frosted glass, shown too little of).
+ */
+private val LitePictureTint = ColorFilter.colorMatrix(ColorMatrix(floatArrayOf(
+    0.62f, 0f, 0f, 0f, 10f,
+    0f, 0.62f, 0f, 0f, 10f,
+    0f, 0f, 0.62f, 0f, 10f,
+    0f, 0f, 0f, 1f, 0f,
+)))
+
+/**
  * A panel over a moving wallpaper whose frames cannot be had: opaque, so the tiles under it do not
  * show, and as light as the frosted glass is elsewhere (PanelTint over a daytime picture comes to
  * about this grey). The old near-black (0x26262A) read as a dark slab, not glass (the owner, TCL
@@ -291,3 +436,33 @@ private val PanelTint = ColorFilter.colorMatrix(ColorMatrix(floatArrayOf(
     0f, 0f, 0.48f, 0f, 14f,
     0f, 0f, 0f, 1f, 0f,
 )))
+
+/**
+ * The panels' own dim of the picture, lighter than [PanelTint] so a panel reads as frosted glass
+ * over a dark wallpaper too: ×0.48 left Control Center a flat brown slab on the owner's dark
+ * wallpaper (「透明模糊玻璃」 is what they remember, 2026-11-16).
+ */
+internal val PanelBright = ColorFilter.colorMatrix(ColorMatrix(floatArrayOf(
+    0.72f, 0f, 0f, 0f, 36f,
+    0f, 0.72f, 0f, 0f, 36f,
+    0f, 0f, 0.72f, 0f, 36f,
+    0f, 0f, 0f, 1f, 0f,
+)))
+
+/**
+ * Control Center's white frosted glass. The baked, blurred wallpaper still carries the texture
+ * (0.30 of its light), but it is lifted into the near-white range instead of the brown slab the
+ * old tint gave a dark wallpaper (「希望是白色磨砂玻璃半透明」, 2026-11-16). The [milk] gradient on
+ * top takes it the rest of the way to white without hiding the picture behind it.
+ */
+internal val PanelFrostWhite = ColorFilter.colorMatrix(ColorMatrix(floatArrayOf(
+    0.30f, 0f, 0f, 0f, 185f,
+    0f, 0.30f, 0f, 0f, 185f,
+    0f, 0f, 0.30f, 0f, 185f,
+    0f, 0f, 0f, 1f, 0f,
+)))
+
+/** Pale stand-ins for the dark solid fallbacks, so the light panel never flashes a grey slab. */
+private val FilmPanelLight = Color(0xEDF2F3F5)
+private val FilmGlassLight = Color(red = 245, green = 246, blue = 248, alpha = 205)
+private val GlassLight = Color(0xE6F2F3F5)

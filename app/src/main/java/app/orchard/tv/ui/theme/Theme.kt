@@ -41,6 +41,23 @@ object Palette {
     val OnFocus = Color(0xFF1D1D1F)
 }
 
+/**
+ * The light appearance of Control Center's white frosted glass: the same labels as the dark theme,
+ * flipped onto the pale panel so they stay readable. Focused controls keep the white plate and the
+ * dark ink; at rest they are a barely tinted grey on the glass.
+ */
+object LightPalette {
+    val Label = Color(0xE61D1D1F)
+    val SecondaryLabel = Color(0x991D1D1F)
+    val TertiaryLabel = Color(0x661D1D1F)
+    val Fill = Color(0x1A1D1D1F)
+    val FocusFill = Color(0xFFFFFFFF)
+    val Destructive = Color(0xFFC62828)
+}
+
+/** True for composables painted on Control Center's white glass (see [LightPalette]). */
+val LocalLightPanel = staticCompositionLocalOf { false }
+
 object Motion {
     /** Strong ease-out: entrances, anything that answers the user. */
     val EaseOut = CubicBezierEasing(0.23f, 1f, 0.32f, 1f)

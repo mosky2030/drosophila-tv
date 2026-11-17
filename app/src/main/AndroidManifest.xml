@@ -115,6 +115,24 @@
             </intent-filter>
         </activity>
 
+        <!-- The puzzle game: a WebView shell over the bundled HTML prototype. Opened by Home's
+             own tile and by the screensaver. Exported so that a TV with no keyboard at hand can
+             still be asked to open it over adb — `am start -n app.orchard.tv/.PuzzleActivity` —
+             while a black window on someone's set is worked out (MiTV4, 2026-11-16).
+             No hardware acceleration: this set's GPU driver gives Chromium's GPU thread no
+             display at all (`validate_display error 3008 EGL_BAD_DISPLAY`, then
+             `eglChooseConfig EGL_BAD_ATTRIBUTE`), and a software LAYER on the view alone drew
+             only the page's background — no frames reached the screen (CDP captureScreenshot
+             timed out for ever). A software WINDOW puts the WebView on the framework's own
+             software path. The game is one picture and a few sprites; a CPU draws it fine. -->
+        <activity
+            android:name=".PuzzleActivity"
+            android:exported="true"
+            android:hardwareAccelerated="false"
+            android:launchMode="singleTask"
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.files"

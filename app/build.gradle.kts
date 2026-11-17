@@ -20,7 +20,9 @@ android {
         minSdk = 21
         targetSdk = 34
         versionCode = 135
-        versionName = "1.95"
+        // Drosophila's own numbering, starting at 1.22: Aerial's 1.95 belonged to a release line this
+        // fork no longer follows, and with no update channel there is nothing left to be newer than.
+        versionName = "1.24"
         // `./gradlew -Pdiag ...`: a build for one reporter's TV whose logcat shows no app lines;
         // see system/DiagLog.kt.
         val diag = project.hasProperty("diag")

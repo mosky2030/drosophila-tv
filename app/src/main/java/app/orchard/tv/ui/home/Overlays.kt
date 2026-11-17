@@ -42,6 +42,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
@@ -49,6 +50,8 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -74,6 +77,8 @@ import app.orchard.tv.ui.components.smoothBorder
 import app.orchard.tv.ui.components.smoothCut
 import app.orchard.tv.ui.theme.Glyph
 import app.orchard.tv.ui.theme.GlyphIcon
+import app.orchard.tv.ui.theme.LightPalette
+import app.orchard.tv.ui.theme.LocalLightPanel
 import app.orchard.tv.ui.theme.Motion
 import app.orchard.tv.ui.theme.Palette
 import app.orchard.tv.ui.theme.Type
@@ -100,14 +105,30 @@ fun MenuRow(
     focusRequester: FocusRequester? = null,
     destructive: Boolean = false,
     trailing: String? = null,
+    /** Where the row came to sit, in root coordinates: the page it opens is placed beside it. */
+    onPlaced: ((Rect) -> Unit)? = null,
 ) {
-    Pressable(onClick = onClick, focusRequester = focusRequester, focusedScale = 1.03f, modifier = modifier.fillMaxWidth()) { state ->
+    Pressable(
+        onClick = onClick,
+        focusRequester = focusRequester,
+        focusedScale = 1.03f,
+        modifier = modifier
+            .fillMaxWidth()
+            .then(
+                if (onPlaced == null) Modifier
+                else Modifier.onGloballyPositioned { c ->
+                    onPlaced(Rect(c.positionInRoot(), Size(c.size.width.toFloat(), c.size.height.toFloat())))
+                },
+            ),
+    ) { state ->
         val bg by animateColorAsState(
             if (state.focused) Palette.Focus else Color.Transparent, tween(140, easing = Motion.EaseOut), label = "row-bg",
         )
+        val light = LocalLightPanel.current
         val fg = when {
             state.focused -> if (destructive) Color(0xFFD70015) else Palette.OnFocus
-            destructive -> Palette.Red
+            destructive -> if (light) LightPalette.Destructive else Palette.Red
+            light -> LightPalette.Label
             else -> Palette.Label
         }
         Row(
@@ -124,7 +145,7 @@ fun MenuRow(
             if (trailing != null) {
                 BasicText(
                     trailing,
-                    style = Type.Callout.copy(color = if (state.focused) Palette.OnFocus.copy(alpha = 0.6f) else Palette.SecondaryLabel),
+                    style = Type.Callout.copy(color = if (state.focused) Palette.OnFocus.copy(alpha = 0.6f) else if (light) LightPalette.SecondaryLabel else Palette.SecondaryLabel),
                     maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 200.dp),
                 )
             }
@@ -135,6 +156,15 @@ fun MenuRow(
 private enum class MenuPage { Main, Folders, Rename, Device }
 
 private val MenuWidth = 250.dp
+
+/**
+ * A rect kept outside the snapshot, for a page that has to know where the page before it sat.
+ *
+ * Written from [androidx.compose.ui.layout.onGloballyPositioned], i.e. from layout: were it state,
+ * writing it would invalidate the very layout that wrote it and the menu would re-place itself for
+ * ever. Read only by the next page's placement, which runs after the main page has been laid out.
+ */
+private class RectHolder { var rect: Rect = Rect.Zero }
 
 /**
  * Long-press menu, opening out of the tile it belongs to. Choosing a folder or a folder's name
@@ -172,6 +202,13 @@ fun AppMenu(
     var origin by remember { mutableStateOf(TransformOrigin.Center) }
     val scroll = rememberScrollState()
     var page by remember(shownApp.key, visible) { mutableStateOf(MenuPage.Main) }
+    // Where the main menu and the row that opened the submenu came to sit: a submenu opens beside
+    // the row, as a menu beside the entry that leads to it, rather than dropping to the tile again.
+    // Before this, "移到文件夹" re-placed itself under the tile like the first page and the menu
+    // jumped down the screen when the second page had fewer rows than the first (the owner, on the
+    // TV, 2026-11-16; on the emulator the two heights were close enough that it looked still).
+    val parentBox = remember { RectHolder() }
+    val openerBox = remember { RectHolder() }
     val folder = shownApp.folder
     val holder = folders.firstOrNull { shownApp.key in it.apps }
     // A look at the disk (and a hash, for an input): once per app, not on each recomposition of the
@@ -199,13 +236,30 @@ fun AppMenu(
                     maxHeight = (constraints.maxHeight - margin * 2).coerceAtLeast(0),
                 ))
                 val gap = 18.dp.roundToPx()
-                // Submenus have different heights; place the measured menu inside the canvas (#1097).
-                val below = shownAnchor.bottom + gap + p.height <= constraints.maxHeight - margin
-                val y = (if (below) shownAnchor.bottom + gap else shownAnchor.top - gap - p.height)
-                    .roundToInt().coerceIn(margin, (constraints.maxHeight - margin - p.height).coerceAtLeast(margin))
-                val x = shownAnchor.left.roundToInt()
-                    .coerceIn(margin, (constraints.maxWidth - margin - p.width).coerceAtLeast(margin))
-                origin = TransformOrigin(((shownAnchor.center.x - x) / p.width.coerceAtLeast(1)).coerceIn(0f, 1f), if (below) 0f else 1f)
+                // A submenu opens beside the row that leads to it; the first page opens above or
+                // below its tile.
+                val parent = parentBox.rect
+                val cascade = page != MenuPage.Main && parent.width > 1f
+                val beside = (parent.right + gap / 2).roundToInt()
+                val toRight = cascade && beside + p.width <= constraints.maxWidth - margin
+                val x = when {
+                    cascade && toRight -> beside
+                    cascade -> (parent.left - gap / 2 - p.width).roundToInt().coerceAtLeast(margin)
+                    else -> shownAnchor.left.roundToInt()
+                        .coerceIn(margin, (constraints.maxWidth - margin - p.width).coerceAtLeast(margin))
+                }
+                val y = if (cascade) {
+                    // Tops up with the row that opened it — the entry the submenu belongs to.
+                    val top = (openerBox.rect.top.takeIf { it > 0f } ?: parent.top).roundToInt()
+                    top.coerceIn(margin, (constraints.maxHeight - margin - p.height).coerceAtLeast(margin))
+                } else {
+                    val below = shownAnchor.bottom + gap + p.height <= constraints.maxHeight - margin
+                    (if (below) shownAnchor.bottom + gap else shownAnchor.top - gap - p.height)
+                        .roundToInt().coerceIn(margin, (constraints.maxHeight - margin - p.height).coerceAtLeast(margin))
+                }
+                val below = !cascade && shownAnchor.bottom + gap + p.height <= constraints.maxHeight - margin
+                origin = if (cascade) TransformOrigin(if (toRight) 0f else 1f, 0f)
+                else TransformOrigin(((shownAnchor.center.x - x) / p.width.coerceAtLeast(1)).coerceIn(0f, 1f), if (below) 0f else 1f)
                 layout(constraints.maxWidth, constraints.maxHeight) { p.place(x, y) }
             },
     ) {
@@ -217,6 +271,15 @@ fun AppMenu(
             Column(
                 Modifier
                     .width(MenuWidth)
+                    // Where this page came to sit, for the page it opens (see [RectHolder]).
+                    .onGloballyPositioned { c ->
+                        if (page == MenuPage.Main) {
+                            parentBox.rect = Rect(
+                                c.positionInRoot(),
+                                Size(c.size.width.toFloat(), c.size.height.toFloat()),
+                            )
+                        }
+                    }
                     .consumeTaps()
                     .liquidGlass(20.dp)
                     .verticalScroll(scroll)
@@ -243,10 +306,19 @@ fun AppMenu(
                             // In a folder too: its apps keep an order of their own (issue #1344).
                             MenuRow(Glyph.Move, stringResource(R.string.menu_move), { onMove(shownApp.key) }, focusRequester = first)
                             if (inFolder) MenuRow(Glyph.Folder, stringResource(R.string.menu_out_of_folder), { onOutOfFolder(shownApp.key) })
-                            MenuRow(Glyph.Folder, stringResource(R.string.menu_to_folder), { page = MenuPage.Folders }, trailing = "›")
+                            // The page that opens is placed beside this very row.
+                            MenuRow(
+                                Glyph.Folder, stringResource(R.string.menu_to_folder),
+                                { page = MenuPage.Folders }, trailing = "›",
+                                onPlaced = { openerBox.rect = it },
+                            )
                             if (shownApp.source != null) {
                                 // A pinned TV input: no app info or uninstall, and "remove" unpins it.
-                                MenuRow(Glyph.Input, stringResource(R.string.menu_source_device), { page = MenuPage.Device }, trailing = "›")
+                                MenuRow(
+                                    Glyph.Input, stringResource(R.string.menu_source_device),
+                                    { page = MenuPage.Device }, trailing = "›",
+                                    onPlaced = { openerBox.rect = it },
+                                )
                                 if (customIcon) {
                                     MenuRow(Glyph.Photo, stringResource(R.string.menu_reset_icon), { onResetIcon(shownApp.key) })
                                 }

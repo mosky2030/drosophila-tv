@@ -5,6 +5,11 @@ import android.content.Context
 import android.content.Intent
 import app.orchard.tv.apps.TileSheet
 import app.orchard.tv.settings.AerialSettings
+import app.orchard.tv.settings.BackAction
+import app.orchard.tv.settings.IconStyle
+import app.orchard.tv.settings.ClockPlace
+import app.orchard.tv.settings.ClockSize
+import app.orchard.tv.settings.IconLook
 import app.orchard.tv.settings.Restricted
 import app.orchard.tv.settings.Effects
 import app.orchard.tv.system.DeviceProfile
@@ -124,21 +129,38 @@ class ConfigReceiver : BroadcastReceiver() {
         if (listOf("kids_off", "kids_used_minutes", "kids_continuous_minutes", "clear_pin").any(intent::hasExtra)) KidsWatch.poke()
         val layout = mapOf<String, (Boolean) -> Unit>(
             "large_clock" to AerialSettings::chooseLargeClock,
-            "clock_right" to AerialSettings::chooseClockRight,
-            "one_row_home" to AerialSettings::chooseOneRowHome,
-            "peek_next_row" to AerialSettings::choosePeekNextRow,
-            "home_plate" to AerialSettings::chooseHomePlate,
             "show_all_names" to AerialSettings::chooseShowAllNames,
         ).filterKeys { intent.hasExtra(it) }
         if (layout.isNotEmpty()) {
             AerialSettings.init(context)
             layout.forEach { (key, choose) -> choose(intent.getBooleanExtra(key, false)) }
         }
-        if (intent.hasExtra("preview_apps")) AerialSettings.previewApps = intent.getIntExtra("preview_apps", 0).coerceAtLeast(0)
-        if (intent.hasExtra("home_columns")) {
+        // ... --es clock_place left|center|right
+        if (intent.hasExtra("clock_place")) {
             AerialSettings.init(context)
-            AerialSettings.chooseHomeColumns(intent.getIntExtra("home_columns", 5))
+            AerialSettings.chooseClockPlace(ClockPlace.of(intent.getStringExtra("clock_place")))
         }
+        // ... --es clock_size small|large|xl|full
+        if (intent.hasExtra("clock_size")) {
+            AerialSettings.init(context)
+            ClockSize.of(intent.getStringExtra("clock_size"))?.let { AerialSettings.chooseClockSize(it) }
+        }
+        // ... --es icon_look original|dopamine
+        if (intent.hasExtra("icon_look")) {
+            AerialSettings.init(context)
+            AerialSettings.chooseIconLook(IconLook.of(intent.getStringExtra("icon_look")))
+        }
+        // ... --es icon_style original|translucent|dock|wheel
+        if (intent.hasExtra("icon_style")) {
+            AerialSettings.init(context)
+            AerialSettings.chooseIconStyle(IconStyle.of(intent.getStringExtra("icon_style")))
+        }
+        // ... --es back_action saver|off
+        if (intent.hasExtra("back_action")) {
+            AerialSettings.init(context)
+            AerialSettings.chooseBackAction(BackAction.of(intent.getStringExtra("back_action")))
+        }
+        if (intent.hasExtra("preview_apps")) AerialSettings.previewApps = intent.getIntExtra("preview_apps", 0).coerceAtLeast(0)
         // ... --ez diag true / --ez mode_switch false / --ez soft_layer true   (see DiagLog;
         //                                 the last two apply the next time Home starts)
         if (intent.hasExtra("diag")) DiagLog.setEnabled(context, intent.getBooleanExtra("diag", false))

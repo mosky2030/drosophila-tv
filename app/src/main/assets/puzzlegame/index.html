@@ -1,0 +1,1697 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<!-- 布局视口钉成 960：老电视（MiTV4，密度 320）的 WebView 在 width=device-width 下按
+     1920 CSS 布局、却以 dpr=2 合成 —— 内容被栅格化成 3840x2160 再缩回 1920 的屏。
+     GPU 配不出这么大的面（eglChooseConfig EGL_BAD_ATTRIBUTE），软件合成也画不动，
+     整屏只剩底色（visualViewport.scale=0.5、CDP 截图超时，2026-11-16 实测）。
+     960x540 的布局 × dpr2 正好是 1920x1080 物理像素，页面 fit() 自己会按 0.5 缩放，
+     高分屏上浏览器的表现不变（同一套缩放公式）。 -->
+<meta name="viewport" content="width=960,initial-scale=1">
+<title>电视拼图 · Drosophila Puzzle</title>
+
+<!-- ==================================================================
+     ★ 启动形态：默认打开是 Aerial 风格桌面 —— 底部一排玻璃图标，全部半透明，
+     只有遥控器选中的那一枚才不透明并微微抬起；方向键选，OK 打开。
+     默认选中「拼图」，按 OK 即进入满屏零文字的拼图屏保；
+     桌面空闲一段时间后也会自动淡入屏保。
+     ★ 直接进屏保的快捷键：键盘 S（或 P）、遥控器「菜单键」；
+       也可在桌面选中「拼图」按 OK。屏保里按「返回」回桌面，「菜单键」进设置。
+     ★★ 拼图专用形态（现在生效）：打开就是满屏拼图，菜单 / APP 桌面 / 居中棋盘
+       已全部下线；拼好自动换一张。开发验收钩子 ?dev=1 才恢复原型多界面。
+     开发验收用参数：?menu=1 看菜单，?saver=1 直接看屏保，?auto=1 看 APP 形态。
+     ================================================================== -->
+
+<!-- ==================================================================
+     ★★★  外观微调：不用改代码，直接在电视上用遥控器调  ★★★
+
+     打开页面后：菜单最后一行「外观微调」，或任意界面按 T 键。
+     方向键 上/下 选参数、左/右 调数值，背后的归位棋盘实时预览，
+     数值自动记住（localStorage），下次打开还是你调好的手感。
+
+     下面这 5 个数字只是「出厂默认值」，只有你想改默认值才动它。
+     ------------------------------------------------------------------
+     seam      细缝宽度 px   0..6     块之间的深色缝
+     bevel     斜面宽度 px   2..14    边缘明暗过渡有多宽
+     highlight 高光强度 %    0..100   上/左棱线有多亮
+     shadow    阴影强度 %    0..100   下/右棱线有多深
+     lift      浮起厚度 %    0..100   投进细缝的外阴影
+     ================================================================== -->
+<script>
+window.TUNE_DEFAULT = {
+  seam:      1,
+  bevel:     3,
+  highlight: 46,
+  shadow:    52,
+  lift:      30
+};
+
+/* ★ 屏保过渡时长（毫秒）：同样只是出厂默认值，想快想慢改这里就行。
+   ------------------------------------------------------------------
+   enter    进入屏保：从深色画面淡入到打乱的拼图
+   solved   拼完之后：细缝消失、融成一整张完整壁纸
+   next     下一张：完整壁纸淡出，新拼图从底下淡入（交叉溶解）
+   hold     拼好后停留多久自动换下一张；按 OK 可以立刻换，不必等
+   ================================================================== */
+window.FADE_DEFAULT = {
+  enter:  1800,   // 进屏保：从深色淡入（原 900，放慢一倍）
+  solved: 1600,   // 拼完：细缝融成完整壁纸（原 800）
+  next:   2200,   // 下一张：交叉溶解（原 1100）
+  hold:  12000    // 拼好后停留（原 6000；不是淡入淡出，想只慢动画就改回 6000）
+};
+</script>
+<style>
+/* ============================================================
+   电视拼图原型：1920x1080 固定设计稿，靠 JS 等比缩放适配窗口。
+   遥控器-only 交互，无鼠标依赖。壁纸只解码一次，所有拼图块都是
+   同一张 background-image 的不同 background-position，内存恒定。
+   每块是完整方形，块间留细缝；边缘内侧做 PS 式「内倒角 / 斜面浮雕」
+   ——上左高光、下右阴影，让块微微凸起。不做凹凸榫头，也不切角。
+   切片仍是同一张 background-image 的偏移：每块显示原格去掉细缝边距
+   后的内容，归位后图像严格连续。斜面只叠在表现层，不改背景坐标系。
+   两种形态共用一套棋盘：屏保铺满 1920x1080 且零文字，APP 居中
+   1280x720 保留 HUD；两者同为 16:9，壁纸不变形。
+   ============================================================ */
+:root{
+  --ink:#f4f6f8; --dim:#a8b4c0; --accent:#ffd479; --accent2:#6fd3ff;
+  --glass:rgba(18,26,36,.62); --line:rgba(255,255,255,.14);
+  --board-w:1280px; --board-h:720px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+/* WebView 壳把当前拼图壁纸垫在底下：页面加载前 WebView 透明露出壁纸，
+   所以这里的底色用透明（#app 自身仍有深色底），避免打开游戏先黑屏。 */
+html,body{width:100%;height:100%;overflow:hidden;background:transparent;
+  font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;color:var(--ink)}
+body{display:grid;place-items:center}
+/* 绝对定位 + 双 translate 居中。用 grid place-items 居中时，浏览器按未缩放的
+   1920x1080 布局盒计算位置，再叠加 scale 会让画面整体偏移、右侧 HUD 被裁。 */
+#app{position:absolute;left:50%;top:50%;width:1920px;height:1080px;
+  transform-origin:center center;background:#070b11;overflow:hidden}
+#backdrop{position:absolute;top:-80px;right:-80px;bottom:-80px;left:-80px;background-size:cover;background-position:center;
+  filter:blur(70px) brightness(.34) saturate(.8);transform:scale(1.08);transition:background-image .6s}
+#backdrop::after{content:"";position:absolute;top:0;right:0;bottom:0;left:0;
+  background:radial-gradient(ellipse at 50% 45%,transparent 20%,rgba(3,6,10,.72) 100%)}
+.view{position:absolute;top:0;right:0;bottom:0;left:0;display:none}
+.view.on{display:block}
+
+/* ---------- Aerial 风格桌面 ----------
+   图标默认半透明玻璃（毛玻璃 + 细白边 + 低不透明度），只有选中的那一枚
+   变成不透明实心色块 + 白细边 + 投影。选中不改变尺寸、不位移、不放大。
+   纯 CSS 绘制，无任何外部图片；backdrop-filter 不被支持时退化为 rgba 玻璃。 */
+#homeWall{position:absolute;top:0;right:0;bottom:0;left:0;background-size:cover;background-position:center}
+#homeShade{position:absolute;top:0;right:0;bottom:0;left:0;pointer-events:none;
+  background:linear-gradient(180deg,rgba(3,6,10,.22) 0%,transparent 42%,rgba(3,6,10,.58) 100%)}
+#homeRow{position:absolute;left:0;right:0;bottom:92px;
+  display:flex;justify-content:center;align-items:flex-end;gap:26px}
+.appIcon{position:relative;width:212px;height:132px;border-radius:18px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;
+  color:#fff;cursor:default;
+  background:linear-gradient(155deg,rgba(255,255,255,.22),rgba(255,255,255,.05));
+  border:1px solid rgba(255,255,255,.30);
+  -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+  opacity:.40;
+  box-shadow:0 6px 18px rgba(0,0,0,.12);
+  transition:opacity .28s ease,
+             background .28s ease,border-color .28s ease,box-shadow .28s ease}
+/* 每个玻璃图标带一层很淡的本色，呼应 Aerial 桌面的彩色玻璃；选中时撤掉。
+   用独立伪元素而不是 color-mix()，老电视 WebView 也能稳定支持。 */
+.appIcon::before{content:"";position:absolute;top:0;right:0;bottom:0;left:0;border-radius:inherit;
+  background:var(--appHue,#fff);opacity:.18;pointer-events:none;z-index:0}
+.appIcon.on::before{opacity:0}
+.appIcon .glyph{position:relative;z-index:1;width:52px;height:52px;display:block;opacity:.92}
+.appIcon .appName{position:relative;z-index:1;font-size:20px;letter-spacing:.05em;
+  white-space:nowrap;text-shadow:0 2px 7px rgba(0,0,0,.75)}
+/* 选中 = 只变不透明：实心主色 + 白细边 + 投影；尺寸与位置完全不变 */
+.appIcon.on{opacity:1;z-index:2;
+  background:var(--appHue,#e0a955);border:2px solid rgba(255,255,255,.94);
+  box-shadow:0 16px 34px rgba(0,0,0,.48),0 0 0 1px rgba(0,0,0,.35)}
+.appIcon.on[data-dark="1"]{color:#1b2027}
+.appIcon.on[data-dark="1"] .appName{text-shadow:none}
+.still .appIcon{transition:none!important}
+
+/* ---------- 菜单 ---------- */
+#menu{display:none;place-items:center}
+#menu.on{display:grid}
+.menu-card{width:880px;padding:46px 60px 38px;border-radius:28px;
+  background:var(--glass);backdrop-filter:blur(24px);border:1px solid var(--line);
+  box-shadow:0 40px 120px rgba(0,0,0,.6)}
+.brand{font-size:22px;letter-spacing:.42em;color:var(--accent);margin-bottom:8px}
+h1{font-size:62px;font-weight:600;letter-spacing:.04em;margin-bottom:10px}
+.sub{font-size:24px;color:var(--dim);margin-bottom:30px;line-height:1.5}
+.mrow{display:flex;align-items:center;height:72px;padding:0 26px;border-radius:16px;
+  font-size:30px;border:2px solid transparent;transition:background .15s,border-color .15s}
+.mrow .k{width:210px;color:var(--dim);font-size:25px}
+.mrow .v{flex:1;display:flex;align-items:center;gap:16px}
+.mrow .arrow{color:var(--dim);font-size:30px}
+.mrow.sel{background:rgba(255,212,121,.13);border-color:var(--accent)}
+.mrow.sel .k{color:var(--ink)}
+.mrow .cta{color:var(--accent);font-weight:600}
+.menu-foot{margin-top:26px;font-size:21px;color:var(--dim);line-height:1.7}
+.menu-foot b{color:var(--ink);font-weight:500}
+
+/* ---------- 游戏 ---------- */
+#hud{position:absolute;left:0;right:0;top:0;height:118px;display:flex;
+  align-items:center;justify-content:space-between;padding:0 90px;
+  transition:opacity .4s}
+.hud-l{display:flex;align-items:baseline;gap:22px}
+.hud-title{font-size:34px;font-weight:600;letter-spacing:.06em}
+.hud-wall{font-size:22px;color:var(--dim)}
+.hud-r{display:flex;gap:52px;font-size:27px}
+.hud-r span{color:var(--dim);font-size:21px;margin-right:10px}
+#boardWrap{position:absolute;left:320px;top:176px;width:1280px;height:720px}
+/* 方形结构：规则细缝配纯深色桌面最干净，不要用壁纸纹理当背景。 */
+#board{position:absolute;top:0;right:0;bottom:0;left:0;border-radius:14px;overflow:hidden;
+  background:#0d141d;box-shadow:0 30px 90px rgba(0,0,0,.65)}
+
+/* 两层结构：wrap 占满格子、负责定位/高亮；tile 按 GAP 内缩形成细缝。
+   形状保持完整方形，不做任何切角。PS 式「内倒角 / 斜面浮雕」由
+   .tile::after 的四条边缘渐变实现：上/左亮、下/右暗 → 微微凸起。
+   filter 只加在焦点块上，不给每块都挂 GPU 滤镜。 */
+/* ⚠ 不给每块挂 will-change：24 块就是 24 个常驻合成层，电视 WebView 每帧
+   合成 24 层直接掉到十几帧，按键像隔着一层棉被。只有真正在动的块才提升
+   （transform 过渡期间浏览器会自动提升），静止时整盘只有一层。 */
+/* ★ 0.13s 在这台电视上像「闪一下」——两块几乎瞬移，看不出谁和谁换了。
+   0.3s 配合平滑曲线，滑动过程看得清、又不拖沓；性能已优化，这个时长不会回卡。 */
+.tileWrap{position:absolute;left:0;top:0;
+  transition:transform .3s cubic-bezier(.33,.02,.28,1);backface-visibility:hidden}
+.tileWrap.focused,.tileWrap.moving{will-change:transform}
+/* ⚠ 斜面的数值不写死在这里：由 JS applyTune() 注入 <style id="tuneStyle">。
+   这样「外观微调」面板能实时改，改默认值也只需动文件顶部的 TUNE_DEFAULT。 */
+.tile{position:absolute;
+  background-image:var(--wall);background-repeat:no-repeat}
+  /* left/top/width/height、background-size / background-position
+     由 JS 按 tileId 写入；所有块共用同一套斜面样式 */
+/* 四条边各一条由外向内淡出的渐变带（内容由 applyTune 注入）。
+   纯绘制，不用 filter / clip-path，电视上开销可忽略。 */
+.tile::after{content:"";position:absolute;top:0;right:0;bottom:0;left:0;pointer-events:none}
+/* 焦点块只提层级，不再挂黄色光晕；选中反馈交给细框 + 手持块的放大/小阴影。 */
+.tileWrap.focused{z-index:6}
+/* 拿起后原位留槽：变暗 + 一道极细暗线，不用虚线、不用彩色 */
+.tileWrap.held{z-index:2}
+.tileWrap.held .tile{filter:brightness(.26)}
+.tileWrap.held::after{content:"";position:absolute;top:8px;right:8px;bottom:8px;left:8px;
+  border:1px solid rgba(255,255,255,.20);border-radius:4px}
+
+/* 手持块：只留一圈柔和的小黑阴影，没有任何彩色光晕。
+   box-shadow 而不是 drop-shadow：drop-shadow 每帧要读 alpha 通道做模糊，
+   手持块跟着遥控器一路移动时这是最贵的一笔；矩形块两者观感几乎一样。 */
+#ghostWrap{position:absolute;left:0;top:0;display:none;z-index:8;
+  box-shadow:0 10px 22px rgba(0,0,0,.62);
+  will-change:transform}
+#ghostWrap.on{display:block}
+/* 手持块复用 .tile 的斜面与棱线，放大后立体感保持一致 */
+
+/* 细中性描边：3px 白线 + 2px 暗外描边，亮/暗壁纸上都看得清。
+   没有黄色光晕，也没有彩色边框。
+   ⚠ 1.5px 在 1080p 电视上离两米看几乎消失（亮白光的块上尤其），加宽到 3px；
+   暗外描边也加粗到 2px，白线压在云海/雪地这类高亮画面上仍有边界。 */
+#focus{position:absolute;left:0;top:0;width:10px;height:10px;z-index:9;
+  border:3px solid rgba(255,255,255,.96);border-radius:5px;
+  box-shadow:0 0 0 2px rgba(0,0,0,.5);
+  pointer-events:none;will-change:transform;
+  /* 不给 box-shadow 加过渡：那会每帧重绘一圈描边阴影。宽度/高度也压到 0.1s。 */
+  transition:width .1s,height .1s,opacity .6s}
+/* 屏保无操作 3 秒后只调焦点框自身透明度。绝不能给 tileWrap 加 opacity，
+   那会把整块拼图一起隐藏。 */
+/* 细框本身已经很克制，静止时只淡到 82%（原 72% 在亮色画面上会糊掉）；
+   遥控器一动恢复全亮。不用黄色光晕也始终看得出选中的是哪块。 */
+.saverIdle #focus{opacity:.82}
+/* 拿起态：不变蓝，只是稍亮一点 + 一点小阴影；「放大」由焦点框与手持块共同承担 */
+#focus.carry{border-color:rgba(255,255,255,.98);
+  box-shadow:0 0 0 1px rgba(0,0,0,.45),0 5px 14px rgba(0,0,0,.5)}
+/* 撞到边界的一下轻微闪烁：opacity 走合成层，不重绘、不重排。
+   原来的 filter:brightness() 在电视软件渲染里每帧都要重算整块，边界连按时最卡。 */
+#focus.bump{animation:bump .16s}
+@keyframes bump{50%{opacity:.55}}
+#hint{position:absolute;left:320px;top:176px;width:1280px;height:720px;z-index:12;
+  background-size:cover;background-position:center;border-radius:14px;
+  box-shadow:0 30px 90px rgba(0,0,0,.8);opacity:0;pointer-events:none;
+  transition:opacity .3s}
+#hint.on{opacity:.92}
+#hint::after{content:"原图 · 2.5 秒后消失";position:absolute;left:24px;bottom:22px;
+  font-size:24px;background:rgba(0,0,0,.62);padding:10px 20px;border-radius:10px}
+#keyhelp{position:absolute;left:0;right:0;bottom:36px;text-align:center;
+  font-size:23px;color:var(--dim);transition:opacity .4s;letter-spacing:.02em}
+#keyhelp b{color:var(--ink);font-weight:600;margin:0 6px}
+#saverTag{position:absolute;right:70px;bottom:52px;font-size:22px;color:var(--dim);
+  opacity:0;transition:opacity .5s}
+#saverTag.on{opacity:.75}
+
+/* 屏保模式：满屏 1920x1080 拼图，零文字。
+   棋盘尺寸由 JS 写 inline；HUD / 按键提示 / 角标 / 完成卡片 / toast 一律不出现。 */
+.saver #hud,.saver #keyhelp,.saver #saverTag,.saver #toast{
+  opacity:0!important;pointer-events:none}
+.saver .solved-card{display:none}
+.saver #board{border-radius:0;box-shadow:none}
+.saver #solvedWall::after{background:none}
+/* ★ 性能（MiTV4 / Chromium 66 软件渲染）：屏保里棋盘 1920x1080 满屏盖住，
+   #backdrop 的 70px blur + brightness + saturate 三重滤镜完全看不见，却要在
+   每次换图/合成时重算一张 2080x1240 的模糊图 —— 这是按键卡顿的主因。直接去掉。 */
+.saver #backdrop{display:none!important}
+/* 软件渲染下 will-change 会把每个块抬成常驻合成层，24 层每帧合成掉到十几帧。
+   电视上交给 transform 自己提升即可，不需要常驻提示。 */
+.saver .tileWrap,.saver .tileWrap.focused,.saver .tileWrap.moving,
+.saver #focus,.saver #ghostWrap{will-change:auto!important}
+/* 焦点框用 WAAPI 做 300ms 滑动（与方块交换同步）；这里不再禁用，
+   否则焦点会瞬移、方块在滑，读起来像「闪一下」。 */
+
+/* ---------- 屏保过渡：淡入进来 / 拼完融成壁纸 / 淡入下一张 ----------
+   只用 opacity 合成，不加 filter / blur，电视 GPU 开销可忽略；
+   两层都 pointer-events:none，遥控器按键一律照常穿透。
+   #curtain  进屏保时由深色淡出，于是画面「淡入」。
+   #fadeWall 拼好后盖住细缝融成完整壁纸；下一局重建完毕后它再淡出，
+             底下已经摆好的新拼图就「淡入」进来 = 交叉溶解。
+   z-index 高于三个 view，但低于 toast(30) / 微调面板(40)。 */
+#curtain,#fadeWall{position:absolute;top:0;right:0;bottom:0;left:0;opacity:0;pointer-events:none}
+#curtain{z-index:15;background:#05080c}
+#fadeWall{z-index:14;background-size:cover;background-position:center;
+  background-repeat:no-repeat}
+/* 屏保完成态：归位棋盘留在底层当过渡起点，不要一下切成模糊暗底 */
+.saverSolved #game{display:block}
+/* 屏保完成态不用 APP 那张带暗角 + 缩放动画的 solvedWall，避免双层叠影；
+   而且 CSS transition 在 headless virtual-time 下会停在半路，统一改走 WAAPI。 */
+.saver #solvedWall{opacity:0!important;transform:none!important;transition:none!important}
+
+/* ---------- 完成 ---------- */
+#solvedWall{position:absolute;top:0;right:0;bottom:0;left:0;background-size:cover;background-position:center;
+  opacity:0;transform:scale(1.06);transition:opacity .9s,transform 2.4s}
+#solved.on #solvedWall{opacity:1;transform:scale(1)}
+#solvedWall::after{content:"";position:absolute;top:0;right:0;bottom:0;left:0;
+  background:linear-gradient(180deg,transparent 58%,rgba(2,5,9,.78) 100%)}
+.solved-card{position:absolute;left:50%;bottom:86px;transform:translateX(-50%);
+  width:900px;padding:34px 44px;border-radius:22px;text-align:center;
+  background:var(--glass);backdrop-filter:blur(24px);border:1px solid var(--line)}
+.solved-card h2{font-size:46px;color:var(--accent);margin-bottom:12px}
+.solved-card p{font-size:26px;margin-bottom:18px}
+.solved-card .keys{font-size:21px;color:var(--dim)}
+.solved-card .keys b{color:var(--ink);font-weight:600}
+
+#toast{position:absolute;left:50%;top:126px;transform:translate(-50%,-14px);
+  padding:14px 30px;border-radius:12px;background:rgba(10,16,24,.9);
+  border:1px solid var(--line);font-size:24px;opacity:0;pointer-events:none;
+  transition:opacity .25s,transform .25s;z-index:30}
+#toast.on{opacity:1;transform:translate(-50%,0)}
+#selftest{position:absolute;left:20px;top:20px;z-index:99;display:none;
+  font:16px/1.5 monospace;color:#9f9;background:#000;padding:20px;white-space:pre-wrap}
+#selftest.on{display:block}
+/* ---------- 外观微调面板 ---------- */
+#tunePanel{position:absolute;top:0;right:0;bottom:0;left:0;z-index:40;display:none;
+  background:linear-gradient(90deg,rgba(3,7,12,0) 38%,rgba(3,7,12,.58) 100%)}
+#tunePanel.on{display:block}
+.tune-card{position:absolute;left:1286px;top:132px;width:590px;
+  padding:32px 40px 26px;border-radius:26px;
+  background:rgba(16,24,34,.95);border:1px solid var(--line);
+  box-shadow:0 30px 100px rgba(0,0,0,.75)}
+.tune-brand{font-size:19px;letter-spacing:.38em;color:var(--accent2);margin-bottom:6px}
+.tune-card h2{font-size:40px;font-weight:600;margin-bottom:4px}
+.tune-sub{font-size:20px;color:var(--dim);margin-bottom:20px;line-height:1.5}
+.tune-row{position:relative;display:flex;align-items:center;height:72px;
+  padding:0 20px;margin-bottom:6px;border-radius:14px;
+  border:2px solid transparent;font-size:26px}
+.tune-row.sel{background:rgba(111,211,255,.13);border-color:var(--accent2)}
+.tune-row .tn{width:168px;color:var(--dim);font-size:23px}
+.tune-row.sel .tn{color:var(--ink)}
+.tune-row .tv{flex:1;display:flex;align-items:center;justify-content:center;gap:14px}
+.tune-row .arrow{color:var(--dim);font-size:28px}
+.tune-row .val{font-weight:600;min-width:100px;text-align:center}
+.tune-row .cta{color:var(--accent);font-weight:600}
+.tune-bar{position:absolute;left:20px;right:20px;bottom:7px;height:6px;
+  border-radius:6px;background:rgba(255,255,255,.10);overflow:hidden}
+.tune-bar i{display:block;height:100%;background:var(--accent2);border-radius:6px}
+.tune-foot{margin-top:18px;font-size:19px;color:var(--dim);line-height:1.75}
+.tune-foot b{color:var(--ink);font-weight:600;margin:0 4px}
+/* 微调时缩小并左移棋盘，右侧腾出面板；同时收起 HUD 与焦点框 */
+/* 缩放后棋盘右边界约 1257px，给 left:1286 的面板留出完整间隙 */
+.tuning #boardWrap{transform:translate(-215px,0) scale(.80);
+  transform-origin:center center;transition:transform .25s}
+.tuning #hud,.tuning #keyhelp,.tuning #saverTag,.tuning #focus{opacity:0;pointer-events:none}
+/* 微调时临时藏起过渡层，但保留 wallUp 状态，关掉面板后能原样回到完成态 */
+.tuning #curtain,.tuning #fadeWall{opacity:0!important}
+/* 验收钩子 ?still=1：关掉所有插值，让无头截图看到确定的终态 */
+.still .tileWrap,.still #focus,.still #ghostWrap,.still #boardWrap{transition:none!important}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="backdrop"></div>
+
+  <!-- ===== Aerial 风格桌面 =====
+       图标默认半透明玻璃，只有遥控器选中的那一枚变成不透明实心并微微抬起。
+       「拼图」既是桌面图标，也是这个桌面空闲后自动淡入的屏保。 -->
+  <section id="home" class="view on">
+    <div id="homeWall"></div>
+    <div id="homeShade"></div>
+    <div id="homeRow"></div>
+  </section>
+
+  <!-- ===== 菜单 ===== -->
+  <section id="menu" class="view">
+    <div class="menu-card">
+      <div class="brand">AERIAL PUZZLE</div>
+      <h1>电视拼图</h1>
+      <div class="sub">用遥控器把打乱的航拍壁纸拼回原样。<br>可以作为游戏，也可以无人操作时自动变成屏保。</div>
+      <div id="menuRows"></div>
+      <div class="menu-foot">
+        <b>方向键</b> 选择　<b>OK</b> 确认　<b>← →</b> 修改数值　<b>返回</b> 回主菜单<br>
+        游戏中(APP)：<b>菜单键</b> 看原图　<b>R</b> 重来　<b>1/2/3</b> 换难度<br>
+        <b>T</b> 或「外观微调」：遥控器实时调细缝 / 斜面 / 高光 / 阴影<br>
+        <b>桌面</b>：方向键选图标　<b>OK</b> 打开　<b>菜单键 / S</b> 直接进屏保　<b>返回</b> 进设置<br>
+        <b>屏保中</b>：<b>返回</b> 回桌面　<b>菜单键</b> 进入本设置界面
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 游戏 ===== -->
+  <section id="game" class="view">
+    <header id="hud">
+      <div class="hud-l">
+        <div class="hud-title">电视拼图</div>
+        <div class="hud-wall" id="hudWall">—</div>
+      </div>
+      <div class="hud-r">
+        <div><span>步数</span><b id="hudSteps">0</b></div>
+        <div><span>用时</span><b id="hudTime">00:00</b></div>
+        <div><span>难度</span><b id="hudDiff">4 × 3</b></div>
+      </div>
+    </header>
+    <div id="boardWrap">
+      <div id="board"></div>
+      <div id="ghostWrap"><div id="ghost" class="tile"></div></div>
+      <div id="focus"></div>
+      <div id="hint"></div>
+    </div>
+    <div id="keyhelp">
+      <b>方向键</b> 移动　<b>OK</b> 拿起 / 放下　<b>返回</b> 取消　<b>菜单</b> 看原图　<b>R</b> 重来　<b>1/2/3</b> 难度　<b>T</b> 外观微调
+    </div>
+    <div id="saverTag">屏保模式 · 按返回退出</div>
+  </section>
+
+  <!-- ===== 完成 ===== -->
+  <section id="solved" class="view">
+    <div id="solvedWall"></div>
+    <div class="solved-card">
+      <h2>拼好了</h2>
+      <p id="solvedStat">—</p>
+      <div class="keys" id="solvedKeys"><b>OK</b> 再来一张　<b>返回</b> 回菜单　<b>菜单键</b> 保存壁纸</div>
+    </div>
+  </section>
+
+  <!-- ===== 外观微调（遥控器实时调，不用改代码） ===== -->
+  <div id="tunePanel">
+    <div class="tune-card">
+      <div class="tune-brand">APPEARANCE</div>
+      <h2>外观微调</h2>
+      <div class="tune-sub">上/下 选参数　左/右 调数值<br>背后是归位预览，边调边看 · 自动保存</div>
+      <div id="tuneRows"></div>
+      <div class="tune-foot">
+        <b>OK</b> 确认　<b>返回</b> 放弃本次修改　<b>T</b> 保存并关闭<br>
+        <span id="tuneNote">—</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 屏保过渡层：黑幕淡入 + 完整壁纸交叉溶解（都不拦截遥控器） -->
+  <div id="fadeWall"></div>
+  <div id="curtain"></div>
+
+  <div id="toast"></div>
+  <pre id="selftest"></pre>
+</div>
+
+<script>
+(function(){
+'use strict';
+
+/* ------------------------------------------------------------
+   配置
+   ------------------------------------------------------------ */
+// 往 assets/ 里丢任意 16:9 图片，把文件名加进这个数组即可扩充随机池。
+var WALLS = [
+  {src:'assets/wall-01.jpg', name:'沙丘 · 巨环与旅人'},
+  {src:'assets/wall-02.jpg', name:'星野 · 巨构与花田'},
+  {src:'assets/wall-03.jpg', name:'帆影 · 云海与水下光'},
+  {src:'assets/wall-04.jpg', name:'林间 · 光隙与小精灵'}
+];
+var DIFFS = [
+  {cols:3, rows:2, name:'轻松 3 × 2'},
+  {cols:4, rows:3, name:'标准 4 × 3'},
+  {cols:6, rows:4, name:'挑战 6 × 4'}
+];
+
+/* ------------------------------------------------------------
+   Aerial 风格桌面图标：纯代码绘制，不依赖任何外部图片。
+   默认全部半透明玻璃，只有选中的那一枚不透明（实心主色 + 抬起）。
+   默认选中「拼图」—— 按 OK 直接进屏保，桌面空闲也会自动淡入屏保。
+   ------------------------------------------------------------ */
+function glyph(inner){
+  return '<svg class="glyph" viewBox="0 0 48 48" fill="none" stroke="currentColor" '+
+    'stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">'+inner+'</svg>';
+}
+var GLYPHS = {
+  hdmi:   glyph('<rect x="6" y="10" width="36" height="26" rx="4"/><path d="M17 40h14M24 36v4"/><path d="M18 23h12"/>'),
+  cast:   glyph('<rect x="7" y="9" width="34" height="26" rx="4"/><path d="M7 35h0"/><path d="M13 41a13 13 0 0 1 0-6M20 41a7 7 0 0 1 0-6"/>'),
+  cloud:  glyph('<path d="M14 33h20a8 8 0 0 0 1-16 12 12 0 0 0-23 3 7 7 0 0 0 2 13z"/><path d="M20 26l6-5 6 5"/>'),
+  puzzle: glyph('<rect x="8" y="9" width="13" height="13" rx="3"/><rect x="27" y="7" width="13" height="13" rx="3"/><rect x="7" y="27" width="13" height="13" rx="3"/><rect x="26" y="26" width="13" height="13" rx="3"/>'),
+  play:   glyph('<circle cx="24" cy="24" r="17"/><path d="M20 16l12 8-12 8z"/>'),
+  fruit:  glyph('<circle cx="24" cy="27" r="14"/><path d="M24 13c0-5 4-8 9-8-1 5-4 8-9 8z"/><path d="M19 27h10"/>')
+};
+var APPS = [
+  {id:'hdmi',   name:'HDMI 1',     hue:'#5568a8', glyph:'hdmi'},
+  {id:'cast',   name:'无线投屏',   hue:'#dd748e', glyph:'cast'},
+  {id:'cloud',  name:'云视听',     hue:'#8b68b5', glyph:'cloud'},
+  {id:'puzzle', name:'拼图',       hue:'#e6a94f', glyph:'puzzle'},
+  {id:'aurora', name:'云视听极光', hue:'#e9e4d8', glyph:'play',  dark:true},
+  {id:'fruit',  name:'奇异果TV',   hue:'#63a45a', glyph:'fruit'}
+];
+var HOME_DEFAULT_SEL = 3;        // 默认停在「拼图」
+
+var BW = 1280, BH = 720;          // 棋盘设计尺寸
+// 验收钩子 ?wallseq=0,1：按序取壁纸，让「这一张 → 下一张」的过渡截图可复现。
+var WALL_SEQ=null, WALL_SEQ_I=0;
+
+/* ------------------------------------------------------------
+   ★ 外观微调：出厂默认值在文件最顶部的 window.TUNE_DEFAULT。
+   这里只做「读默认值 → 读本地存档 → 得到当前值」。
+   GAP / BEVEL 是活变量，applyTune() 会更新，切片逻辑自动跟随。
+   ------------------------------------------------------------ */
+var TUNE_ITEMS = [
+  {k:'seam',      name:'细缝宽度', min:0,   max:6,   step:1, unit:'px', hint:'块之间的深色缝，越大越像独立磁砖'},
+  {k:'bevel',     name:'斜面宽度', min:2,   max:14,  step:1, unit:'px', hint:'边缘明暗过渡有多宽，越大立体感越厚'},
+  {k:'highlight', name:'高光强度', min:0,   max:100, step:5, unit:'%',  hint:'上/左棱线有多亮，调低会更含蓄'},
+  {k:'shadow',    name:'阴影强度', min:0,   max:100, step:5, unit:'%',  hint:'下/右棱线有多深'},
+  {k:'lift',      name:'浮起厚度', min:0,   max:100, step:5, unit:'%',  hint:'投进细缝的外阴影，让块显得浮起来'}
+];
+/* v2：出厂值改细缝 1 / 斜面 3（原 2 / 6 太粗）。升版本号让旧的 localStorage
+   调参值失效，否则新出厂值会被上次存下的旧数字盖回去。 */
+var TUNE_KEY = 'tvpuzzle.tune.v2';
+function cloneTune(o){ var t={}; for(var k in o) t[k]=o[k]; return t; }
+function loadTune(){
+  var t=cloneTune(window.TUNE_DEFAULT||{}), raw=null, i, it, v;
+  try{ raw=JSON.parse(localStorage.getItem(TUNE_KEY)||'null'); }catch(e){}
+  for(i=0;i<TUNE_ITEMS.length;i++){
+    it=TUNE_ITEMS[i];
+    if(!isFinite(t[it.k])) t[it.k]=it.min;
+    if(raw){ v=+raw[it.k]; if(isFinite(v)) t[it.k]=clamp(v,it.min,it.max); }
+  }
+  return t;
+}
+var TUNE = loadTune();
+var TUNE_ROWS = TUNE_ITEMS.map(function(it){return {kind:'param',item:it};})
+  .concat([{kind:'reset'},{kind:'done'}]);
+var GAP = TUNE.seam;              // 每块四周内缩量，块间细缝 = 2*GAP
+var BEVEL = TUNE.bevel;           // PS 式内斜面宽度，px
+var IDLE_CHOICES = [30, 60, 120, 300, 0]; // 0 = 从不自动进屏保
+var SAVER_IDLE_RESET = 120000;    // 屏保里长时间无操作，自动换一张
+/* 屏保过渡时长：出厂值在文件顶部 window.FADE_DEFAULT，这里只做兜底与夹取。 */
+var DEV_IDLE_MS = null;           // ?idle=fast 验收钩子：把桌面 idle 压到 1.2 秒
+var FD = window.FADE_DEFAULT || {};
+var FADE = {
+  enter:  clamp(+FD.enter  || 900, 0, 5000),
+  solved: clamp(+FD.solved || 800, 0, 5000),
+  next:   clamp(+FD.next   || 1100, 0, 5000),
+  hold:   clamp(+FD.hold   || 6000, 1000, 60000)
+};
+
+/* ------------------------------------------------------------
+   ★ 渐进难度：第一次进入从最简单开始，每成功拼完一局自动升一级。
+   「愿意玩」= 真的拼完一局；只是打开/退出不升级。进度存 localStorage，
+   关掉页面再回来仍接着走。用户在菜单里手动选难度会固定下来，
+   把难度行调回「自动进阶」即可恢复按进度走。
+   ------------------------------------------------------------ */
+var PROGRESS_KEY = 'tvpuzzle.progress.v1';
+function loadProgress(){
+  var p={level:0,manual:null};
+  try{
+    var o=JSON.parse(localStorage.getItem(PROGRESS_KEY)||'null');
+    if(o){
+      if(isFinite(+o.level)) p.level=clamp(Math.floor(+o.level),0,99);
+      if(o.manual!==null && o.manual!==undefined && isFinite(+o.manual))
+        p.manual=clamp(Math.floor(+o.manual),0,DIFFS.length-1);
+    }
+  }catch(e){}
+  return p;
+}
+function saveProgress(){ try{ localStorage.setItem(PROGRESS_KEY,JSON.stringify(progress)); }catch(e){} }
+var progress = loadProgress();
+function autoDiff(){ return clamp(progress.level,0,DIFFS.length-1); }
+function currentDiff(){ return progress.manual===null ? autoDiff() : progress.manual; }
+function diffChoice(){ return progress.manual===null ? 0 : progress.manual+1; } // 0=自动, 1..3=固定
+function diffLabel(){
+  return progress.manual===null
+    ? '自动进阶 · 当前 '+DIFFS[autoDiff()].name
+    : DIFFS[progress.manual].name+'（手动固定）';
+}
+function setDiffChoice(choice){
+  progress.manual = choice===0 ? null : choice-1;
+  saveProgress();
+  S.diff = currentDiff();
+}
+// 真正拼完一局才升级，封顶最高难度；手动固定时也累计进度，
+// 以后把菜单调回「自动进阶」会直接落到对应阶段。
+function bumpProgress(){
+  progress.level=Math.min(progress.level+1,DIFFS.length-1);
+  saveProgress();
+}
+var DEV_DIFF = null;   // ?d=N 仅验收用：固定难度，不读写真实进度
+function pickDiff(){ return (DEV_DIFF!==null) ? DEV_DIFF : currentDiff(); }
+
+var $ = function(id){ return document.getElementById(id); };
+var app=$('app'), board=$('board'), focusEl=$('focus');
+var ghostWrap=$('ghostWrap'), ghostEl=$('ghost');
+var fadeWall=$('fadeWall'), curtain=$('curtain');
+var views={home:$('home'),menu:$('menu'),game:$('game'),solved:$('solved')};
+
+var S = {
+  view:'home', saver:false, homeSel:HOME_DEFAULT_SEL,
+  diff:1, wall:0, wallFixed:false, idleIdx:1,
+  cols:4, rows:3, bw:BW, bh:BH, grid:[], wraps:[], gap:GAP, bevel:BEVEL,
+  cursor:0, carry:null, focusedWrap:null, steps:0, startedAt:0, elapsed:0,
+  menuSel:0, lastInput:Date.now(), hintTimer:null, saverTimer:null,
+  toastTimer:null, solvedAt:0, about:false, wallUp:false,
+  tuning:false, tuneSel:0, tuneBackup:null, tuneSnap:null
+};
+
+/* ------------------------------------------------------------
+   屏保过渡：DOM 立即写终值，视觉插值交给 WAAPI。
+   CSS transition 在 headless --virtual-time-budget 截图里会停在半路，
+   而「终值先落 DOM」保证任何时刻截图 / 探针读到的都是确定的最终状态。
+   ?still=1、时长为 0 或浏览器不支持 animate() 时直接落终值。
+   ------------------------------------------------------------ */
+function cancelFade(el){
+  try{ if(el.getAnimations) el.getAnimations().forEach(function(a){a.cancel();}); }catch(e){}
+}
+function fadeTo(el,from,to,ms){
+  cancelFade(el);                    // 打断上一次淡入淡出，避免旧动画盖住新终值
+  el.style.opacity=String(to);
+  if(app.classList.contains('still') || !el.animate || ms<=0) return;
+  try{
+    el.animate([{opacity:from},{opacity:to}],
+      {duration:ms,easing:'ease-in-out',fill:'none'});
+  }catch(e){}
+}
+function resetFade(){
+  cancelFade(curtain); cancelFade(fadeWall);
+  curtain.style.opacity='0'; fadeWall.style.opacity='0';
+  S.wallUp=false; app.classList.remove('saverSolved');
+}
+
+/* ------------------------------------------------------------
+   工具
+   ------------------------------------------------------------ */
+// 棋盘尺寸随形态变：APP 模式 1280x720 留 HUD，屏保模式铺满 1920x1080。
+// 两者都是 16:9，壁纸不会被拉伸变形。
+function cellSize(){ return {w:S.bw/S.cols, h:S.bh/S.rows}; }
+function rc(pos){ return {r:Math.floor(pos/S.cols), c:pos%S.cols}; }
+function posOf(r,c){ return r*S.cols+c; }
+function clamp(v,a,b){ return v<a?a:(v>b?b:v); }
+function num(x){ return Math.round(x*100)/100; }
+function fmtTime(ms){
+  var s=Math.floor(ms/1000), m=Math.floor(s/60);
+  return ('0'+m).slice(-2)+':'+('0'+(s%60)).slice(-2);
+}
+function showView(name){
+  S.view=name;
+  for(var k in views) views[k].classList.toggle('on', k===name);
+}
+function toast(msg){
+  if(S.saver) return;   // 屏保里不出现任何文字气泡，交互靠视觉自解释
+  var t=$('toast'); t.textContent=msg; t.classList.add('on');
+  clearTimeout(S.toastTimer);
+  S.toastTimer=setTimeout(function(){t.classList.remove('on');},2200);
+}
+var focusIdleTimer=null;
+function markInput(){
+  S.lastInput=Date.now();
+  // 屏保里焦点只在刚操作完亮 3 秒，之后淡出，保持观赏性。
+  focusEl.classList.remove('idle'); app.classList.remove('saverIdle');
+  clearTimeout(focusIdleTimer);
+  if(S.saver){
+    focusIdleTimer=setTimeout(function(){
+      if(S.saver){ focusEl.classList.add('idle'); app.classList.add('saverIdle'); }
+    },3000);
+  }
+}
+
+/* ------------------------------------------------------------
+   形状：完整方形，不做任何几何裁剪（无 clip-path、无切角、无 tab）。
+   PS 式「内倒角 / 斜面浮雕」是纯 CSS 表现层：.tile::after 四条边缘
+   渐变（上/左亮、下/右暗）+ 1px 内描边，让块微微凸起。
+   buildBoard() 只把斜面宽度写进 --bevel，完全不动背景坐标系。
+   ------------------------------------------------------------ */
+function bevelPx(){ return BEVEL+'px'; }
+
+/* ------------------------------------------------------------
+   外观微调引擎：把 5 个数字变成一段 CSS 注入 <style id="tuneStyle">。
+   改 seam 会重排块的位置/尺寸，其它参数只换样式；两者都实时生效。
+   ------------------------------------------------------------ */
+function f2(x){ return (Math.round(Math.min(1,Math.max(0,x))*100)/100).toFixed(2); }
+function applyTune(rebuild){
+  GAP=TUNE.seam; BEVEL=TUNE.bevel;
+  S.gap=GAP; S.bevel=BEVEL;
+  var hi=TUNE.highlight/100, sh=TUNE.shadow/100, lf=TUNE.lift/100, B=bevelPx();
+  var css=
+    /* 每块只留上亮 / 下暗两条 1px 棱线。原来还有左右两条 + 一个 5px 模糊外阴影，
+       24 块 × 3 个额外绘制，模糊阴影尤其贵：电视 WebView 是软件光栅化，
+       一帧就要为每块算一遍模糊。细缝收到 1px 之后左右棱线本来也看不见了。 */
+    '.tile{box-shadow:'+
+      'inset 0 1px 0 rgba(255,255,255,'+f2(hi)+'),'+
+      'inset 0 -1px 0 rgba(0,0,0,'+f2(sh)+'),'+
+      '0 1px 0 rgba(0,0,0,'+f2(lf*.55)+')}'+
+    '.tile::after{background:'+
+      'linear-gradient(180deg,rgba(255,255,255,'+f2(hi*1.03)+'),rgba(255,255,255,0)) top center/100% '+B+' no-repeat,'+
+      'linear-gradient(90deg,rgba(255,255,255,'+f2(hi*.69)+'),rgba(255,255,255,0)) left center/'+B+' 100% no-repeat,'+
+      'linear-gradient(0deg,rgba(0,0,0,'+f2(sh*.97)+'),rgba(0,0,0,0)) bottom center/100% '+B+' no-repeat,'+
+      'linear-gradient(270deg,rgba(0,0,0,'+f2(sh*.76)+'),rgba(0,0,0,0)) right center/'+B+' 100% no-repeat}';
+  var st=$('tuneStyle');
+  if(!st){ st=document.createElement('style'); st.id='tuneStyle'; document.head.appendChild(st); }
+  st.textContent=css;
+  app.style.setProperty('--bevel',B);
+  if(rebuild && S.grid.length){ buildBoard(); renderPositions(); renderFocus(); }
+}
+function saveTune(){ try{ localStorage.setItem(TUNE_KEY,JSON.stringify(TUNE)); }catch(e){} }
+function renderTune(){
+  var html='',i,r,it,v,pct,cls;
+  for(i=0;i<TUNE_ROWS.length;i++){
+    r=TUNE_ROWS[i]; cls='tune-row'+(i===S.tuneSel?' sel':'');
+    if(r.kind==='param'){
+      it=r.item; v=TUNE[it.k];
+      pct=Math.round((v-it.min)/(it.max-it.min)*100);
+      html+='<div class="'+cls+'"><div class="tn">'+it.name+'</div>'+
+        '<div class="tv"><span class="arrow">‹</span><span class="val">'+v+it.unit+'</span><span class="arrow">›</span></div>'+
+        '<div class="tune-bar"><i style="width:'+pct+'%"></i></div></div>';
+    } else if(r.kind==='reset'){
+      html+='<div class="'+cls+'"><div class="tn"></div><div class="tv">↺　恢复出厂默认</div></div>';
+    } else {
+      html+='<div class="'+cls+'"><div class="tn"></div><div class="tv"><span class="cta">▶　完成，保存并返回</span></div></div>';
+    }
+  }
+  $('tuneRows').innerHTML=html;
+  r=TUNE_ROWS[S.tuneSel];
+  $('tuneNote').textContent = r.kind==='param' ? r.item.hint :
+    (r.kind==='reset' ? '按 OK 把 5 个参数一次改回出厂手感' : '按 OK / T 保存并回到刚才的界面');
+}
+function openTune(){
+  if(S.tuning) return;
+  S.tuneBackup=cloneTune(TUNE);
+  S.tuneSnap={
+    view:S.view, grid:S.grid.slice(), steps:S.steps, startedAt:S.startedAt,
+    cursor:S.cursor, carry:S.carry, wall:S.wall, saver:S.saver, elapsed:S.elapsed,
+    full:(S.bw===1920)
+  };
+  S.tuneSel=0; S.tuning=true;
+  S.saver=false; app.classList.remove('saver');
+  S.cols=DIFFS[S.diff].cols; S.rows=DIFFS[S.diff].rows;
+  if(S.wall<0||S.wall>=WALLS.length) S.wall=0;
+  layoutBoard(false);   // 满屏预览会挤到面板，微调时统一退回 1280x720
+  buildBoard();
+  resetGrid();
+  S.cursor=0; S.carry=null; S.focusedWrap=null;
+  renderPositions(); renderFocus();
+  showView('game');
+  app.classList.add('tuning');
+  $('tunePanel').classList.add('on');
+  renderTune(); markInput();
+}
+function closeTune(commit){
+  if(!S.tuning) return;
+  var s=S.tuneSnap;
+  if(!commit){ TUNE=cloneTune(S.tuneBackup); applyTune(false); }
+  else saveTune();
+  S.tuning=false;
+  app.classList.remove('tuning');
+  $('tunePanel').classList.remove('on');
+  S.grid=s.grid.slice(); if(!S.grid.length) resetGrid();
+  S.steps=s.steps; S.startedAt=s.startedAt; S.cursor=s.cursor;
+  S.carry=null; S.wall=s.wall; S.saver=s.saver; S.elapsed=s.elapsed;
+  layoutBoard(s.full);  // 回到打开面板前的满屏 / 居中形态
+  buildBoard(); renderPositions(); renderFocus(); updateHUD();
+  app.classList.toggle('saver',S.saver);
+  if(s.view==='menu') toMenu(); else showView(s.view);
+  markInput();
+}
+function tuneKey(a){
+  var r=TUNE_ROWS[S.tuneSel];
+  if(a==='up'||a==='down'){
+    S.tuneSel=clamp(S.tuneSel+(a==='down'?1:-1),0,TUNE_ROWS.length-1);
+    renderTune(); return;
+  }
+  if(a==='left'||a==='right'){
+    if(r.kind!=='param') return;
+    var it=r.item;
+    TUNE[it.k]=clamp(TUNE[it.k]+(a==='right'?1:-1)*it.step,it.min,it.max);
+    applyTune(it.k==='seam');
+    renderTune(); saveTune(); return;
+  }
+  if(a==='ok'){
+    if(r.kind==='reset'){
+      TUNE=cloneTune(window.TUNE_DEFAULT); applyTune(true);
+      renderTune(); saveTune(); toast('已恢复出厂手感');
+    } else if(r.kind==='done') closeTune(true);
+    else toast('用 ← → 调整数值');
+    return;
+  }
+  if(a==='back'){ closeTune(false); return; }
+  if(a==='tune'){ closeTune(true); return; }
+}
+
+/* ------------------------------------------------------------
+   棋盘构建：wrap 按 tileId 固定，交换时只改 transform。
+   因此 background-image 全程只有一张，浏览器只解码一次。
+   ------------------------------------------------------------ */
+// tile 左上角在格内 (GAP,GAP)，所以背景要偏移到原图的
+// (c*cs.w+GAP, r*cs.h+GAP) 处；细缝里的像素被深色桌面遮住，图像仍连续。
+function slicePos(tileId){
+  var cs=cellSize(), p=rc(tileId);
+  return num(-(p.c*cs.w+GAP))+'px '+num(-(p.r*cs.h+GAP))+'px';
+}
+function buildBoard(){
+  var cs=cellSize();
+  var w=num(cs.w-2*GAP), h=num(cs.h-2*GAP);
+  S.gap=GAP; S.bevel=BEVEL;
+  var bgSize=num(S.cols*cs.w)+'px '+num(S.rows*cs.h)+'px'; // = BW x BH
+  board.style.setProperty('--wall','url("'+WALLS[S.wall].src+'")');
+  app.style.setProperty('--bevel',bevelPx());   // ghost 也要继承到同一斜面宽度
+  board.innerHTML='';
+  S.wraps=[];
+  for(var id=0;id<S.cols*S.rows;id++){
+    var wrap=document.createElement('div');
+    wrap.className='tileWrap';
+    wrap.style.width=num(cs.w)+'px'; wrap.style.height=num(cs.h)+'px';
+    var el=document.createElement('div');
+    el.className='tile';
+    el.style.left=GAP+'px'; el.style.top=GAP+'px';
+    el.style.width=w+'px'; el.style.height=h+'px';
+    el.style.backgroundSize=bgSize;
+    el.style.backgroundPosition=slicePos(id);
+    el.style.backgroundImage='url("'+WALLS[S.wall].src+'")';
+    // 图也直接写在每块上，不只靠 CSS 变量 --wall：老电视的 WebView（Chromium 66，
+    // 软件合成）不解析 background-image:var(--wall)，整盘只剩深色底，只有拿着的那块
+    // （内联 backgroundImage）看得见图 —— 2026-11-16 电视实测。同一张图 24 次引用，
+    // 浏览器只解码一次。
+    wrap.appendChild(el);
+    board.appendChild(wrap);
+    S.wraps.push(wrap);
+  }
+  ghostWrap.style.width=num(cs.w)+'px'; ghostWrap.style.height=num(cs.h)+'px';
+  ghostEl.style.left=GAP+'px'; ghostEl.style.top=GAP+'px';
+  ghostEl.style.width=w+'px'; ghostEl.style.height=h+'px';
+  ghostEl.style.backgroundImage='url("'+WALLS[S.wall].src+'")';
+  ghostEl.style.backgroundSize=bgSize;
+  // 焦点框贴合整格；没有 pad 扩展，框与块严格重合。
+  focusEl.style.width=num(cs.w)+'px'; focusEl.style.height=num(cs.h)+'px';
+  focusEl._lastT=null; ghostWrap._lastT=null;  // 换图/换难度后不要从上一局的位置插值
+  $('hint').style.backgroundImage='url("'+WALLS[S.wall].src+'")';
+  $('backdrop').style.backgroundImage='url("'+WALLS[S.wall].src+'")';
+  $('solvedWall').style.backgroundImage='url("'+WALLS[S.wall].src+'")';
+  $('hudWall').textContent=WALLS[S.wall].name;
+  $('hudDiff').textContent=S.cols+' × '+S.rows+' 方形';
+}
+function tileT(pos){
+  var cs=cellSize(), q=rc(pos);
+  return 'translate3d('+num(q.c*cs.w)+'px,'+num(q.r*cs.h)+'px,0)';
+}
+
+function renderPositions(){
+  for(var p=0;p<S.grid.length;p++) S.wraps[S.grid[p]].style.transform=tileT(p);
+}
+function renderFocus(){
+  var t=tileT(S.cursor);
+  // 拿起后焦点框也轻微放大 1.02，与手持块的 1.06 形成层次；不再用彩色框。
+  var ft=(S.carry!==null)?t+' scale(1.02)':t;
+  var prevF=focusEl._lastT||ft, prevT=ghostWrap._lastT||t;
+  // DOM 立即落到终值，视觉插值交给 WAAPI。CSS transition 在 headless
+  // virtual-time 截图里会停在半路，导致焦点与手持块看起来错开一格。
+  focusEl.style.transform=ft;
+  focusEl.classList.toggle('carry',S.carry!==null);
+  if(S.focusedWrap) S.focusedWrap.classList.remove('focused');
+  S.focusedWrap=S.wraps[S.grid[S.cursor]];
+  S.focusedWrap.classList.add('focused');
+  var still=app.classList.contains('still');
+  // ★ 焦点框是连续按方向键游走的操作，必须跟手：150ms 滑过去看得见轨迹又不拖沓。
+  //   方块「交换」是另一回事（.tileWrap 的 CSS transition .3s，用户确认时长合适），
+  //   两者解耦——之前把焦点框也拉到 300ms，连按方向键时就像慢半拍。
+  var focusOpt={duration:150,easing:'cubic-bezier(.33,.02,.28,1)'};
+  if(prevF!==ft && !still) focusEl.animate([{transform:prevF},{transform:ft}],focusOpt);
+  if(S.carry!==null){
+    var id=S.grid[S.carry];
+    ghostWrap.classList.add('on');
+    ghostWrap.style.transform=t+' scale(1.06)';
+    ghostEl.style.backgroundPosition=slicePos(id);
+    if(prevT!==t && !still){
+      ghostWrap.animate([{transform:prevT+' scale(1.06)'},{transform:t+' scale(1.06)'}],focusOpt);
+    }
+  } else {
+    ghostWrap.classList.remove('on');
+  }
+  focusEl._lastT=ft;
+  ghostWrap._lastT=t;
+}
+function bump(){
+  // 不用「移除 class → 读 offsetWidth → 加回」这招重启动画：读 offsetWidth 会强制
+  // 同步重排整盘 24 块（方块越多越慢），撞着边界连按时这是最明显的一次卡顿。
+  // WAAPI 每次新建一个动画，天然重头播，opacity 只走合成层。
+  try{ focusEl.animate([{opacity:1},{opacity:.55},{opacity:1}],{duration:160}); }
+  catch(e){ focusEl.classList.remove('bump'); focusEl.classList.add('bump'); }
+}
+function updateHUD(){
+  $('hudSteps').textContent=S.steps;
+  $('hudTime').textContent=fmtTime(S.elapsed);
+}
+
+/* ------------------------------------------------------------
+   打乱 / 交换 / 完成
+   ------------------------------------------------------------ */
+function resetGrid(){
+  S.grid=[];
+  for(var i=0;i<S.cols*S.rows;i++) S.grid.push(i);
+}
+function shuffle(){
+  resetGrid();
+  var n=S.grid.length;
+  // 交换式拼图：任意两格可换，所有排列都有解。
+  // 从完成态做大量随机交换，天然保证可解，且不会出现「只剩一格」的死局。
+  for(var k=0;k<n*8;k++){
+    var a=Math.floor(Math.random()*n), b=Math.floor(Math.random()*n);
+    if(a===b) continue;
+    var t=S.grid[a]; S.grid[a]=S.grid[b]; S.grid[b]=t;
+  }
+  var wrong=0; for(var i=0;i<n;i++) if(S.grid[i]!==i) wrong++;
+  if(wrong < Math.max(2,Math.floor(n*.7))) return shuffle(); // 太接近完成就重来
+}
+function isSolved(){
+  for(var i=0;i<S.grid.length;i++) if(S.grid[i]!==i) return false;
+  return true;
+}
+function swap(p1,p2){
+  var t=S.grid[p1]; S.grid[p1]=S.grid[p2]; S.grid[p2]=t;
+  renderPositions();
+}
+function pickWall(){
+  if(WALL_SEQ){   // 只用于验收截图，用完最后一个就停在那张
+    S.wall=WALL_SEQ[Math.min(WALL_SEQ_I++,WALL_SEQ.length-1)];
+    return;
+  }
+  if(!S.wallFixed) S.wall=Math.floor(Math.random()*WALLS.length);
+}
+function clearHeld(){
+  for(var i=0;i<S.wraps.length;i++) S.wraps[i].classList.remove('held');
+}
+
+// 屏保铺满整块 1920x1080 设计稿；APP 模式居中 1280x720 给 HUD 让位。
+function layoutBoard(full){
+  S.bw = full ? 1920 : BW;
+  S.bh = full ? 1080 : BH;
+  var w=$('boardWrap'), h=$('hint');
+  var L=full?'0px':'320px', T=full?'0px':'176px';
+  w.style.left=L; w.style.top=T; w.style.width=S.bw+'px'; w.style.height=S.bh+'px';
+  h.style.left=L; h.style.top=T; h.style.width=S.bw+'px'; h.style.height=S.bh+'px';
+}
+function startGame(opts){
+  opts=opts||{};
+  // cross = 完成态换下一张：旧壁纸层淡出 → 底下已重建好的新拼图淡入。
+  // 其余所有入口（冷启动 / 菜单进屏保 / idle 进屏保 / 再来一张）走「从深色淡入」。
+  var cross = (opts.fade==='cross' && S.wallUp && !!opts.saver);
+  S.saver=!!opts.saver;
+  // 每次开局按当前进度重算难度（验收钩子 ?d=N 可临时锁定）
+  S.diff = pickDiff();
+  S.cols=DIFFS[S.diff].cols; S.rows=DIFFS[S.diff].rows;
+  layoutBoard(S.saver);
+  pickWall();
+  buildBoard();
+  shuffle();
+  S.cursor=0; S.carry=null; S.focusedWrap=null; S.steps=0; S.elapsed=0;
+  S.startedAt=Date.now();
+  renderPositions(); renderFocus(); updateHUD();
+  app.classList.toggle('saver',S.saver);
+  focusEl.classList.remove('idle'); app.classList.remove('saverIdle');
+  clearTimeout(S.saverTimer);
+  markInput();
+  showView('game');
+  $('saverTag').classList.remove('on');   // 屏保不显示任何角标文字
+  app.classList.remove('saverSolved');
+  if(cross){
+    // 棋盘已在壁纸层下面重建完毕，此时淡出壁纸 = 下一张拼图淡入。
+    fadeTo(curtain,0,0,0);
+    fadeTo(fadeWall,1,0,FADE.next);
+  } else {
+    fadeTo(fadeWall,0,0,0);
+    fadeTo(curtain,1,0,FADE.enter);   // 画面淡入，不带任何文字
+  }
+  S.wallUp=false;
+}
+function onSolved(){
+  S.elapsed=Date.now()-S.startedAt;
+  S.solvedAt=Date.now();
+  updateHUD();
+  // 真的拼完一局才算「愿意玩」：进度 +1，下一局自动升一级（封顶最高难度）。
+  bumpProgress();
+  // 屏保里完成态只留一张纯壁纸（solved-card 由 CSS 隐藏），连隐藏文字都不写。
+  if(!S.saver){
+    var nextName=(progress.manual===null)
+      ? DIFFS[autoDiff()].name+'（自动进阶）'
+      : DIFFS[progress.manual].name+'（手动固定）';
+    $('solvedStat').innerHTML='用时 '+fmtTime(S.elapsed)+'　·　'+S.steps+' 步　·　'+
+      DIFFS[S.diff].name+'　·　'+WALLS[S.wall].name+
+      '<br><span style="color:#ffd479">下一局：'+nextName+'</span>';
+    $('solvedKeys').innerHTML='<b>OK</b> 再来一张　<b>返回</b> 回菜单　<b>菜单键</b> 保存壁纸';
+  }
+  showView('solved');
+  if(S.saver){
+    // 归位棋盘留在底层当过渡起点，完整壁纸淡入盖掉细缝 → 融成一整张画。
+    // 停留 FADE.hold 后壁纸淡出、下一张打乱拼图淡入；按 OK 可立刻跳过等待。
+    // 屏保全程零文字：只写背景图与 opacity，不写任何文案节点。
+    app.classList.add('saverSolved');
+    fadeWall.style.backgroundImage='url("'+WALLS[S.wall].src+'")';
+    fadeTo(curtain,0,0,0);
+    fadeTo(fadeWall,0,1,FADE.solved);
+    S.wallUp=true;
+    clearTimeout(S.saverTimer);
+    S.saverTimer=setTimeout(function(){
+      startGame({saver:true,fade:'cross'});
+    },FADE.hold);
+  }
+}
+function showHint(){
+  if(S.saver) return;               // 屏保不给提示，保持观赏性
+  if(S.view!=='game') return;
+  $('hint').classList.add('on');
+  clearTimeout(S.hintTimer);
+  S.hintTimer=setTimeout(function(){$('hint').classList.remove('on');},2500);
+}
+function saveWallpaper(){
+  var a=document.createElement('a');
+  a.href=WALLS[S.wall].src; a.download='aerial-puzzle-wallpaper.jpg';
+  document.body.appendChild(a); a.click(); a.remove();
+  toast('已保存壁纸 · Android 版将调用 WallpaperManager');
+}
+
+/* ------------------------------------------------------------
+   菜单
+   ------------------------------------------------------------ */
+function menuData(){
+  var idle=IDLE_CHOICES[S.idleIdx];
+  return [
+    {k:'', v:'<span class="cta">▶　开始拼图</span>', act:'start'},
+    {k:'难度', v:'<span class="arrow">‹</span>'+diffLabel()+'<span class="arrow">›</span>', act:'diff'},
+    {k:'壁纸', v:'<span class="arrow">‹</span>'+(S.wallFixed?WALLS[S.wall].name:'随机 4 张')+'<span class="arrow">›</span>', act:'wall'},
+    {k:'屏保', v:'<span class="arrow">‹</span>'+(idle===0?'关闭 · 不自动进入':'空闲 '+idle+' 秒后自动开始')+'<span class="arrow">›</span>', act:'idle'},
+    {k:'', v:'<span class="cta">▶　立即进入屏保</span>', act:'saver'},
+    {k:'', v:'<span class="cta">▶　外观微调（细缝 / 斜面 / 立体感）</span>', act:'tune'},
+    {k:'', v:'关于 · 技术与落地', act:'about'}
+  ];
+}
+function renderMenu(){
+  var rows=menuData(), html='';
+  for(var i=0;i<rows.length;i++){
+    html+='<div class="mrow'+(i===S.menuSel?' sel':'')+'" data-i="'+i+'">'+
+      (rows[i].k?'<div class="k">'+rows[i].k+'</div>':'')+
+      '<div class="v">'+rows[i].v+'</div></div>';
+  }
+  $('menuRows').innerHTML=html;
+}
+function menuMove(dir){
+  var n=menuData().length;
+  S.menuSel=clamp(S.menuSel+dir,0,n-1); renderMenu();
+}
+function menuAdjust(dir){
+  var act=menuData()[S.menuSel].act, n;
+  if(act==='diff'){
+    // 4 个选项：0=自动进阶，1..3=固定难度。手动选过就固定，选回 0 恢复自动。
+    setDiffChoice(clamp(diffChoice()+dir,0,DIFFS.length));
+  }
+  else if(act==='idle'){ n=IDLE_CHOICES.length; S.idleIdx=clamp(S.idleIdx+dir,0,n-1); }
+  else if(act==='wall'){
+    // 列表末尾是「随机」，选到它时 wallFixed=false
+    var max=WALLS.length; // 0..max-1 = 固定图, max = 随机
+    var cur=S.wallFixed?S.wall:max;
+    cur=clamp(cur+dir,0,max);
+    S.wallFixed=(cur<max);
+    if(S.wallFixed) S.wall=cur;
+  } else return;
+  renderMenu();
+}
+function menuOK(){
+  var act=menuData()[S.menuSel].act;
+  if(act==='start') startGame({});
+  else if(act==='saver') startGame({saver:true});
+  else if(act==='tune') openTune();
+  else if(act==='about') toast('1 张图只解码 1 次 · PS 式内倒角 · 按 T 可调外观 · Android TV 可注册为屏保');
+  else menuAdjust(1);   // 在数值行按 OK 等同于向右调
+}
+function toMenu(){
+  clearTimeout(S.saverTimer); clearTimeout(focusIdleTimer);
+  focusEl.classList.remove('idle'); app.classList.remove('saverIdle');
+  S.saver=false; app.classList.remove('saver');
+  resetFade();     // 退出屏保：淡入/交叉溶解层全部收干净，菜单不被遮住
+  $('hint').classList.remove('on');
+  S.about=false; renderMenu(); showView('menu');
+}
+
+/* ------------------------------------------------------------
+   桌面：图标渲染与焦点。图标的透明度完全交给 CSS 的两态，
+   这里只负责标 .on —— 保证「只有选中的才不透明」是一条硬规则。
+   ------------------------------------------------------------ */
+function renderHome(){
+  var h='';
+  for(var i=0;i<APPS.length;i++){
+    var a=APPS[i];
+    h+='<div class="appIcon'+(i===S.homeSel?' on':'')+'" data-i="'+i+'"'+
+       ' style="--appHue:'+a.hue+'"'+(a.dark?' data-dark="1"':'')+'>'+
+       GLYPHS[a.glyph]+'<div class="appName">'+a.name+'</div></div>';
+  }
+  $('homeRow').innerHTML=h;
+  $('homeWall').style.backgroundImage='url("'+WALLS[S.wall].src+'")';
+}
+function homeMove(dir){
+  S.homeSel=clamp(S.homeSel+dir,0,APPS.length-1);
+  renderHome();
+}
+function homeOK(){
+  if(APPS[S.homeSel].id==='puzzle') startGame({saver:true});
+  else toast('原型演示：目前只接入了「拼图」');
+}
+function toHome(){
+  clearTimeout(S.saverTimer); clearTimeout(focusIdleTimer);
+  focusEl.classList.remove('idle'); app.classList.remove('saverIdle');
+  S.saver=false; app.classList.remove('saver');
+  resetFade();
+  $('hint').classList.remove('on');
+  renderHome(); showView('home'); markInput();
+}
+
+/* ------------------------------------------------------------
+   遥控器输入
+   ------------------------------------------------------------ */
+function moveCursor(dx,dy){
+  var q=rc(S.cursor);
+  var nr=clamp(q.r+dy,0,S.rows-1), nc=clamp(q.c+dx,0,S.cols-1);
+  var np=posOf(nr,nc);
+  if(np===S.cursor){ bump(); return; }
+  S.cursor=np; renderFocus();
+}
+function keyOK(){
+  if(S.view==='menu'){ menuOK(); return; }
+  if(S.view==='home'){ homeOK(); return; }
+  if(S.view==='solved'){
+    // 完成态按 OK 立即开下一局：屏保里不必等自动换图，
+    // 且下一局会按刚升级的进度自动变难，画面仍然满屏零文字。
+    startGame({saver:S.saver, fade:(S.saver && S.wallUp)?'cross':'in'});
+    return;
+  }
+  if(S.view!=='game') return;
+  if(S.carry===null){
+    S.carry=S.cursor;
+    S.wraps[S.grid[S.carry]].classList.add('held');
+    renderFocus();
+    toast('已拿起 · 移到目标格再按 OK');
+  } else {
+    var from=S.carry, to=S.cursor;
+    S.wraps[S.grid[from]].classList.remove('held');
+    S.carry=null;
+    if(from!==to){ swap(from,to); S.steps++; updateHUD(); }
+    renderFocus();
+    if(isSolved()) onSolved();
+  }
+}
+function keyBack(){
+  // 拼图专用形态：返回只用来「放下手里这块」，不再回菜单 / 桌面 —— 那两个界面已下线，
+  // 真正的退出交给系统（Aerial 屏保 / PuzzleActivity 自己处理 BACK）。
+  if(S.view==='game' && S.carry!==null){
+    clearHeld();
+    S.carry=null; renderFocus(); toast('已取消'); return;
+  }
+  if(DEV_MODE){
+    // 原型多界面（?dev=1 才有）：保留旧的返回行为。
+    if(S.view==='home'){ toMenu(); return; }
+    if(S.view==='game'){ if(S.saver) toHome(); else toMenu(); return; }
+    if(S.view==='solved'){ if(S.saver) toHome(); else toMenu(); return; }
+    if(S.view==='menu'){ toHome(); return; }
+  }
+}
+function keyMenu(){
+  // 拼图专用形态里没有设置菜单：菜单键不再进任何界面（也不再看原图 —— 屏保零文字）。
+  if(!DEV_MODE) return;
+  // 桌面 / 菜单视图按菜单键 = 直接进屏保（用户要的快捷键，遥控器上就是「菜单」）
+  if(S.view==='home'){ startGame({saver:true}); return; }
+  if(S.view==='game'){
+    // 满屏屏保里「看原图」被禁用；菜单键进设置。APP 模式仍保留「菜单键看原图」。
+    if(S.saver) toMenu(); else showHint();
+  }
+  // 屏保完成态里菜单键进设置，而不是弹出保存壁纸。
+  else if(S.view==='solved'){ if(S.saver) toMenu(); else saveWallpaper(); }
+  else if(S.view==='menu') startGame({saver:true});
+}
+
+// 同时兼容键盘与 Android TV WebView 的 keyCode（DPAD 19-23 / BACK 4 / MENU 82）
+var KEYCODE={19:'up',20:'down',21:'left',22:'right',23:'ok',4:'back',82:'menu',
+             8:'back',27:'back',13:'ok',32:'ok'};
+function dispatch(action){
+  markInput();
+  if(S.tuning){ tuneKey(action); return; }
+  if(action==='up'||action==='down'||action==='left'||action==='right'){
+    if(S.view==='menu'){
+      if(action==='up') menuMove(-1);
+      else if(action==='down') menuMove(1);
+      else menuAdjust(action==='right'?1:-1);
+    } else if(S.view==='home'){
+      if(action==='left') homeMove(-1);
+      else if(action==='right') homeMove(1);
+    } else if(S.view==='game'){
+      moveCursor(action==='left'?-1:(action==='right'?1:0),
+                 action==='up'?-1:(action==='down'?1:0));
+    }
+  }
+  else if(action==='ok') keyOK();
+  else if(action==='back') keyBack();
+  else if(action==='menu'){ if(DEV_MODE) keyMenu(); }
+  else if(action==='hint') showHint();
+  else if(action==='reshuffle'){ if(S.view==='game'){ shuffle(); S.carry=null;
+      clearHeld(); S.cursor=0; S.steps=0; S.startedAt=Date.now();
+      renderPositions(); renderFocus(); updateHUD(); toast('已重新打乱'); } }
+  else if(action==='diff1'||action==='diff2'||action==='diff3'){
+    setDiffChoice(+action.slice(-1));   // 1/2/3 = 固定 轻松/标准/挑战
+    if(S.view==='menu') renderMenu(); else startGame({saver:S.saver});
+    toast('难度：'+DIFFS[S.diff].name+'（已固定，菜单可调回自动进阶）');
+  }
+  else if(action==='saver'){ startGame({saver:true}); }
+  else if(action==='tune'){ if(DEV_MODE) openTune(); }
+}
+document.addEventListener('keydown',function(e){
+  var a=KEYCODE[e.keyCode], k=e.key;
+  if(!a){
+    if(k==='ArrowUp')a='up'; else if(k==='ArrowDown')a='down';
+    else if(k==='ArrowLeft')a='left'; else if(k==='ArrowRight')a='right';
+    else if(k==='Enter'||k===' ')a='ok';
+    else if(k==='Escape'||k==='Backspace')a='back';
+    else if(k==='m'||k==='M'||k==='ContextMenu')a='menu';
+    else if(k==='h'||k==='H')a='hint';
+    else if(k==='r'||k==='R')a='reshuffle';
+    else if(k==='1')a='diff1'; else if(k==='2')a='diff2'; else if(k==='3')a='diff3';
+    // S / P：一键直接进屏保（用户要的快捷键；遥控器对应「菜单键」）
+    else if(k==='s'||k==='S'||k==='p'||k==='P')a='saver';
+    else if(k==='t'||k==='T')a='tune';
+  }
+  if(a){ e.preventDefault(); dispatch(a); }
+},{passive:false});
+
+/* ------------------------------------------------------------
+   屏保 idle 调度
+   ------------------------------------------------------------ */
+setInterval(function(){
+  if(S.tuning) return;   // 微调面板里不计时、不自动进屏保
+  var now=Date.now();
+  if(S.view==='game' && !S.saver){
+    S.elapsed=now-S.startedAt; updateHUD();
+  }
+  var idle=IDLE_CHOICES[S.idleIdx];
+  if(idle===0 && DEV_IDLE_MS===null) return;
+  var idleMs=(DEV_IDLE_MS!==null)?DEV_IDLE_MS:idle*1000;
+  // 桌面 / APP 无操作达到阈值 → 自动淡入屏保；设置菜单里不把人拽走。
+  if(!S.saver && S.view!=='solved' && S.view!=='menu' && now-S.lastInput>idleMs){
+    startGame({saver:true});
+  }
+  // 屏保模式：长时间无操作 → 换一张新图，避免画面卡死
+  if(S.saver && (S.view==='game'||S.view==='solved') && now-S.lastInput>SAVER_IDLE_RESET){
+    markInput(); startGame({saver:true});
+  }
+},500);
+
+/* ------------------------------------------------------------
+   缩放：1920x1080 设计稿等比适配任何窗口 / 电视分辨率
+   ------------------------------------------------------------ */
+function fit(){
+  /* 用布局视口（doc）而非 innerWidth：TV WebView 可能带 page zoom，
+     innerWidth 会随 zoom 变大，导致设计稿被二次放大。 */
+  var lw=document.documentElement.clientWidth||window.innerWidth,
+      lh=document.documentElement.clientHeight||window.innerHeight;
+  var s=Math.min(lw/1920,lh/1080);
+  window.__fitScale=s;
+  app.style.transform='translate(-50%,-50%) scale('+s+')';
+}
+window.addEventListener('resize',fit); fit();
+
+/* ------------------------------------------------------------
+   自检：?selftest=1 输出断言结果，供无头浏览器 --dump-dom 验证
+   ------------------------------------------------------------ */
+function selfTest(){
+  var out=[],pass=0;
+  function ok(name,cond){ out.push((cond?'PASS':'FAIL')+'  '+name); if(cond)pass++; }
+  var origDiff=S.diff,origWall=S.wall,origView=S.view;
+  S.diff=1; S.cols=4; S.rows=3; S.view='game'; S.saver=false;
+  layoutBoard(false);   // 自检固定在 APP 尺寸，避免受默认满屏启动影响
+  buildBoard();   // keyOK() 会访问 wraps，自检必须先建棋盘
+  resetGrid();
+  ok('完成态 isSolved() 为真', isSolved());
+  shuffle();
+  var n=S.grid.length,wrong=0,seen={};
+  for(var i=0;i<n;i++){ if(S.grid[i]!==i)wrong++; seen[S.grid[i]]=1; }
+  ok('打乱后至少 70% 块错位 ('+wrong+'/'+n+')', wrong>=Math.floor(n*.7));
+  ok('打乱后仍是 0..n-1 的一个排列', Object.keys(seen).length===n);
+  var cs=cellSize();
+  ok('slicePos(5) 对应第 2 列第 2 行且含细缝偏移',
+     slicePos(5)===num(-(cs.w+GAP))+'px '+num(-(cs.h+GAP))+'px');
+  var snapshot=S.grid.slice();
+  swap(0,1); swap(0,1);
+  ok('同一对格子交换两次可还原', S.grid.join()===snapshot.join());
+  resetGrid();
+  ok('手动还原后 isSolved() 为真', isSolved());
+  S.cursor=0; moveCursor(-1,0);
+  ok('左上角继续按左不会越界', S.cursor===0);
+  S.cursor=posOf(2,3); moveCursor(1,0);
+  ok('右下角继续按右不会越界', S.cursor===posOf(2,3));
+  resetGrid(); S.cursor=0; S.carry=null;
+  keyOK(); ok('OK 拿起后进入 carry 模式', S.carry===0);
+  moveCursor(1,0); keyOK();
+  ok('拿起→移动→放下完成一次交换', S.carry===null && S.grid[0]===1 && S.grid[1]===0);
+  ok('壁纸池 4 张且都有文件名', WALLS.length===4 && WALLS.every(function(w){return !!w.src && !!w.name;}));
+  ok('难度 3 档且块数递增', DIFFS.length===3 && DIFFS[0].cols*DIFFS[0].rows<DIFFS[2].cols*DIFFS[2].rows);
+  ok('屏保随机选图始终落在池内', (function(){for(var k=0;k<50;k++){pickWall();if(S.wall<0||S.wall>=WALLS.length)return false;}return true;})());
+
+  // ---- 完整方形 + PS 式内斜面 ----
+  var tw=num(cs.w-2*S.gap), th=num(cs.h-2*S.gap);
+  var tiles=S.wraps.map(function(w){return w.firstChild;});
+  ok('块保持完整方形：没有任何 clip-path / 切角',
+     tiles.every(function(el){return !el.style.clipPath && !el.style.webkitClipPath;}));
+  ok('内斜面宽度落在可调范围内，且手持块继承同一宽度',
+     S.bevel>=2 && S.bevel<=14 && app.style.getPropertyValue('--bevel')===S.bevel+'px');
+  ok('::after 有四条边缘渐变（上/左亮、下/右暗）', (function(){
+     var bg=getComputedStyle(tiles[0],'::after').backgroundImage;
+     return (bg.match(/linear-gradient/g)||[]).length>=4 &&
+            bg.indexOf('255, 255, 255')>=0 && bg.indexOf('0, 0, 0')>=0;
+  })());
+  var bs=getComputedStyle(tiles[0],'::after').backgroundSize;
+  ok('四条斜面带只有 --bevel 宽 ['+bs+']',
+     (bs.split(S.bevel+'px').length-1)>=4 && bs.split(',').length===4);
+  ok('棱线用了 inset 高光/阴影 + 投向细缝的外阴影', (function(){
+     var sh=getComputedStyle(tiles[0]).boxShadow;
+     return (sh.match(/inset/g)||[]).length>=4 && sh.indexOf('rgba(0, 0, 0')>=0;
+  })());
+  ok('细缝宽度一致且为 2*GAP', S.gap===GAP && S.gap>=0 &&
+     tiles.every(function(el){return el.style.left===S.gap+'px' && el.style.top===S.gap+'px';}));
+  ok('tile 尺寸 = 格子 - 2*GAP', tiles.every(function(el){
+       return el.style.width===tw+'px' && el.style.height===th+'px';}));
+  ok('wrap 尺寸 = 整格，无 pad 向外扩展', S.wraps.every(function(w){
+       return w.style.width===num(cs.w)+'px' && w.style.height===num(cs.h)+'px';}));
+  ok('所有块共用同一张背景、同一 background-size（只解码一次）',
+     tiles.every(function(el){return el.style.backgroundSize===num(S.bw)+'px '+num(S.bh)+'px';}) &&
+     board.style.getPropertyValue('--wall').indexOf('wall-')>=0);
+  ok('background-position 按 tileId 严格递增（相邻块图像连续）',
+     tiles.every(function(el,id){
+       var p=rc(id);
+       return el.style.backgroundPosition===num(-(p.c*cs.w+S.gap))+'px '+num(-(p.r*cs.h+S.gap))+'px';
+     }));
+  ok('归位后所有块 transform 覆盖整格且不重叠', (function(){
+     resetGrid(); renderPositions();
+     var seenT={};
+     for(var p=0;p<n;p++){
+       var tr=S.wraps[p].style.transform;
+       if(seenT[tr]) return false; seenT[tr]=1;
+       // CSSOM 会把 translate3d 规范化成 "translate3d(320px, 0px, 0px)"，
+       // 与 tileT() 生成的紧凑串不同，所以比较解析后的数值而不是字符串。
+       var m=/translate3d\(\s*(-?[\d.]+)px,\s*(-?[\d.]+)px/.exec(tr), q=rc(p);
+       if(!m || +m[1]!==num(q.c*cs.w) || +m[2]!==num(q.r*cs.h)) return false;
+     }
+     return Object.keys(seenT).length===n;
+  })());
+  ok('焦点框尺寸与格子对齐、位置与当前块一致',
+     focusEl.style.width===num(cs.w)+'px' && focusEl.style.height===num(cs.h)+'px' &&
+     focusEl.style.transform===S.wraps[S.grid[S.cursor]].style.transform);
+  ok('已彻底移除凹凸榫头 / 切角逻辑',
+     !('shape' in S) && !('pad' in S) && !('edges' in S) && !('paths' in S) &&
+     !('clip' in S) && !('chamfer' in S));
+
+  // ---- 外观微调（用户可以自己调，不必碰代码） ----
+  ok('出厂默认值来自文件顶部 window.TUNE_DEFAULT 的 5 个数字',
+     !!window.TUNE_DEFAULT && TUNE_ITEMS.length===5 &&
+     TUNE_ITEMS.every(function(it){return isFinite(window.TUNE_DEFAULT[it.k]);}));
+  ok('微调面板有 5 个参数行 + 恢复默认 + 完成',
+     TUNE_ROWS.length===7 && !!$('tunePanel') && !!$('tuneRows'));
+  ok('注入样式含 4 条 inset 棱线与 4 条边缘渐变', (function(){
+     var css=$('tuneStyle')?$('tuneStyle').textContent:'';
+     return (css.match(/inset/g)||[]).length>=4 &&
+            (css.match(/linear-gradient/g)||[]).length===4;
+  })());
+  ok('改一个参数会同步 GAP/BEVEL 与 slicePos', (function(){
+     var o=cloneTune(TUNE), oldG=GAP;
+     TUNE.seam=clamp(oldG+1,0,6); applyTune(false);
+     var r=(GAP===TUNE.seam && slicePos(5)===num(-(cs.w+GAP))+'px '+num(-(cs.h+GAP))+'px');
+     TUNE=o; applyTune(false);
+     return r;
+  })());
+  ok('当前 5 个参数都被限制在各自 min/max 内', TUNE_ITEMS.every(function(it){
+     return TUNE[it.k]>=it.min && TUNE[it.k]<=it.max;
+  }));
+
+  // ---- 渐进难度：首次最简单 → 拼完一局升级 → 可手动固定 / 调回自动 ----
+  // 这一段会临时改动进度并写 localStorage，末尾原样还原，不污染真实存档。
+  var _pSnap={level:progress.level,manual:progress.manual}, _dSnap=DEV_DIFF, _sSnap=null;
+  try{ _sSnap=localStorage.getItem(PROGRESS_KEY); }catch(e){}
+  progress.level=0; progress.manual=null; DEV_DIFF=null;
+  ok('首次进入：进度 0 → 最简单的 3 × 2，菜单显示「自动进阶」',
+     currentDiff()===0 && autoDiff()===0 && diffChoice()===0 &&
+     diffLabel().indexOf('自动进阶')>=0 && DIFFS[0].cols===3 && DIFFS[0].rows===2);
+  bumpProgress();
+  ok('拼完第一局：进度 +1，下一局自动升到 4 × 3',
+     progress.level===1 && pickDiff()===1 &&
+     DIFFS[pickDiff()].cols===4 && DIFFS[pickDiff()].rows===3);
+  bumpProgress();
+  ok('再拼完一局：升到最高档 6 × 4',
+     progress.level===2 && currentDiff()===2 &&
+     DIFFS[currentDiff()].cols===6 && DIFFS[currentDiff()].rows===4);
+  bumpProgress();
+  ok('难度封顶在最高档，不会越界', progress.level===2 && pickDiff()===2 &&
+     pickDiff()<=DIFFS.length-1);
+  var _lvl=progress.level;
+  setDiffChoice(1);
+  ok('菜单手动固定难度：不再随进度变化，标签写明「手动固定」',
+     progress.manual===0 && currentDiff()===0 && diffChoice()===1 &&
+     progress.level===_lvl && diffLabel().indexOf('手动固定')>=0);
+  progress.level=0; bumpProgress();
+  ok('手动固定期间仍累计进度，但当前难度保持固定',
+     progress.level===1 && currentDiff()===0);
+  setDiffChoice(0);
+  ok('菜单调回「自动进阶」：立刻按已累计的进度落到对应阶段',
+     progress.manual===null && currentDiff()===1 && diffChoice()===0 &&
+     diffLabel().indexOf('自动进阶')>=0);
+  DEV_DIFF=2;
+  ok('验收钩子 ?d=N 只临时锁难度，不改进度',
+     pickDiff()===2 && progress.level===1 && progress.manual===null);
+  DEV_DIFF=_dSnap;
+  ok('难度菜单是 4 项循环：自动 / 轻松 / 标准 / 挑战', (function(){
+     progress.manual=null;
+     var seen=[],c=diffChoice(),i;
+     for(i=0;i<4;i++){ seen.push(c); c=clamp(c+1,0,DIFFS.length); }
+     return seen.join(',')==='0,1,2,3';
+  })());
+  progress.level=_pSnap.level; progress.manual=_pSnap.manual;
+  try{
+    if(_sSnap===null) localStorage.removeItem(PROGRESS_KEY);
+    else localStorage.setItem(PROGRESS_KEY,_sSnap);
+  }catch(e){}
+
+  // ---- Aerial 风格桌面：只有选中的图标才不透明 ----
+  ok('桌面有 6 枚图标、恰好 1 枚选中，默认停在「拼图」', (function(){
+     renderHome();
+     var all=$('homeRow').querySelectorAll('.appIcon');
+     return all.length===APPS.length && all.length===6 &&
+            $('homeRow').querySelectorAll('.appIcon.on').length===1 &&
+            APPS[HOME_DEFAULT_SEL].id==='puzzle' &&
+            S.homeSel===HOME_DEFAULT_SEL;
+  })());
+  ok('未选中图标半透明、选中图标完全不透明', (function(){
+     var on=$('homeRow').querySelector('.appIcon.on'),
+         off=$('homeRow').querySelector('.appIcon:not(.on)');
+     return !!on && !!off && +getComputedStyle(off).opacity<.6 &&
+            +getComputedStyle(on).opacity===1 &&
+            +getComputedStyle(on).opacity>+getComputedStyle(off).opacity;
+  })());
+  ok('选中态是实心主色块，但不放大、不位移（与未选中同尺寸）', (function(){
+     var on=$('homeRow').querySelector('.appIcon.on'),
+         off=$('homeRow').querySelector('.appIcon:not(.on)'), cs=getComputedStyle(on);
+     return cs.backgroundColor.indexOf('rgba(0, 0, 0, 0)')<0 &&
+            cs.backgroundImage==='none' && parseFloat(cs.borderTopWidth)>=2 &&
+            cs.transform==='none' &&
+            on.offsetWidth===off.offsetWidth && on.offsetHeight===off.offsetHeight &&
+            Math.abs(on.getBoundingClientRect().width-off.getBoundingClientRect().width)<.01 &&
+            Math.abs(on.getBoundingClientRect().height-off.getBoundingClientRect().height)<.01;
+  })());
+  ok('桌面焦点左右移动不越界', (function(){
+     var old=S.homeSel;
+     S.homeSel=0; homeMove(-1);
+     var a=(S.homeSel===0);
+     homeMove(99);
+     var b=(S.homeSel===APPS.length-1);
+     S.homeSel=old; renderHome();
+     return a && b;
+  })());
+  ok('桌面壁纸取自同一壁纸池，拼图与桌面连贯', (function(){
+     var bg=$('homeWall').style.backgroundImage;
+     return bg.indexOf('wall-')>=0 &&
+            WALLS.some(function(w){return bg.indexOf(w.src)>=0;});
+  })());
+
+  // ---- 屏保过渡：淡入进来 / 拼完融成壁纸 / 淡入下一张 ----
+  ok('过渡时长来自顶部 FADE_DEFAULT（淡入 / 融图 / 换张 / 停留）',
+     !!window.FADE_DEFAULT &&
+     ['enter','solved','next','hold'].every(function(k){return isFinite(+window.FADE_DEFAULT[k]);}) &&
+     FADE.enter>=0 && FADE.solved>=0 && FADE.next>=0 && FADE.hold>=1000);
+  // 原来 900 / 800 / 1100 / 6000，按用户要求整体放慢一倍
+  ok('淡入淡出全部放慢一倍（≥1800 / 1600 / 2200 / 12000 ms）',
+     FADE.enter>=1800 && FADE.solved>=1600 && FADE.next>=2200 && FADE.hold>=12000);
+  ok('fadeTo() 先把终值落进 DOM，不依赖动画跑完', (function(){
+     fadeTo(curtain,1,0,900);
+     var a=(curtain.style.opacity==='0');
+     fadeTo(fadeWall,0,1,800);
+     return a && fadeWall.style.opacity==='1';
+  })());
+  ok('两层过渡都不拦截遥控器、不带任何文字',
+     getComputedStyle(curtain).pointerEvents==='none' &&
+     getComputedStyle(fadeWall).pointerEvents==='none' &&
+     curtain.textContent==='' && fadeWall.textContent==='');
+  ok('层级：curtain > fadeWall > 棋盘，且都低于 toast / 微调面板', (function(){
+     var c=+getComputedStyle(curtain).zIndex, f=+getComputedStyle(fadeWall).zIndex,
+         t=+getComputedStyle($('toast')).zIndex, p=+getComputedStyle($('tunePanel')).zIndex;
+     return c>f && f>0 && c<t && c<p;
+  })());
+  ok('屏保完成态保留归位棋盘当过渡起点，不切成暗底', (function(){
+     var old=$('game').className;
+     $('game').classList.remove('on');
+     app.classList.add('saverSolved');
+     var r=(getComputedStyle($('game')).display==='block');
+     app.classList.remove('saverSolved');
+     $('game').className=old;
+     return r;
+  })());
+  ok('屏保完成态不叠加 APP 的暗角壁纸层（无重影）', (function(){
+     var old=app.className;
+     app.classList.add('saver');
+     var r=(+getComputedStyle($('solvedWall')).opacity===0);
+     app.className=old;
+     return r;
+  })());
+  ok('resetFade() 清空过渡层与状态，退出屏保后菜单不被遮住', (function(){
+     S.wallUp=true; app.classList.add('saverSolved');
+     resetFade();
+     return curtain.style.opacity==='0' && fadeWall.style.opacity==='0' &&
+            S.wallUp===false && !app.classList.contains('saverSolved');
+  })());
+
+  // ---- 满屏屏保 / 零文字 ----
+  layoutBoard(true);
+  ok('屏保棋盘铺满 1920x1080，格子随之变成 480x360',
+     S.bw===1920 && S.bh===1080 && cellSize().w===480 && cellSize().h===360 &&
+     $('boardWrap').style.width==='1920px' && $('boardWrap').style.left==='0px');
+  ok('两种棋盘都是 16:9，壁纸不会被拉伸',
+     Math.abs(S.bw/S.bh-16/9)<.001 && Math.abs(BW/BH-16/9)<.001);
+  ok('屏保零文字：HUD / 按键提示 / 角标 / 完成卡片 / toast 全隐藏', (function(){
+     // 这些元素带 opacity transition，先临时关掉再读 computed，否则读到过渡起点。
+     var els=[$('hud'),$('keyhelp'),$('saverTag'),$('toast'),focusEl], olds=[], i;
+     for(i=0;i<els.length;i++){ olds[i]=els[i].style.transition; els[i].style.transition='none'; }
+     app.classList.add('saver');
+     var r=(+getComputedStyle($('hud')).opacity===0 &&
+            +getComputedStyle($('keyhelp')).opacity===0 &&
+            +getComputedStyle($('saverTag')).opacity===0 &&
+            getComputedStyle(document.querySelector('.solved-card')).display==='none' &&
+            +getComputedStyle($('toast')).opacity===0);
+     app.classList.remove('saver');
+     for(i=0;i<els.length;i++) els[i].style.transition=olds[i];
+     return r;
+  })());
+  ok('屏保里 toast() / showHint() 都不产生文字', (function(){
+     var before=$('toast').textContent, old=S.saver;
+     S.saver=true; toast('不该出现'); showHint();
+     var r=($('toast').textContent===before && !$('hint').classList.contains('on'));
+     S.saver=old; return r;
+  })());
+  ok('静止时焦点框仍保持 70% 以上可见，不会淡没', (function(){
+     var old=focusEl.style.transition;
+     focusEl.style.transition='none';
+     app.classList.add('saverIdle');
+     var r=(+getComputedStyle(focusEl).opacity>=.7);
+     app.classList.remove('saverIdle');
+     focusEl.style.transition=old;
+     return r;
+  })());
+
+  // ---- 焦点提示：细中性框 + 拿起时轻微放大和小阴影 ----
+  ok('焦点框是 1.5px 细线、中性白，不含黄 / 蓝', (function(){
+     var cs=getComputedStyle(focusEl);
+     return parseFloat(cs.borderTopWidth)<=2 &&
+            cs.borderTopColor.indexOf('255, 212, 121')<0 &&
+            cs.borderTopColor.indexOf('111, 211, 255')<0 &&
+            cs.borderTopColor.indexOf('255, 255, 255')>=0;
+  })());
+  ok('焦点框 / 焦点块 / 手持块都不再挂黄色光晕', (function(){
+     var a=getComputedStyle(focusEl).boxShadow,
+         b=getComputedStyle(ghostWrap).filter,
+         c=S.focusedWrap?getComputedStyle(S.focusedWrap).filter:'none';
+     return a.indexOf('255, 212, 121')<0 && b.indexOf('255, 212, 121')<0 &&
+            c.indexOf('255, 212, 121')<0;
+  })());
+  ok('拿起态：不变蓝，有小阴影，焦点框与手持块都放大', (function(){
+     var old=S.carry;
+     S.carry=0; renderFocus();
+     var cs=getComputedStyle(focusEl);
+     var r=(cs.borderTopColor.indexOf('111, 211, 255')<0 &&
+            cs.boxShadow.indexOf('rgba(0, 0, 0')>=0 &&
+            focusEl.style.transform.indexOf('scale(1.02)')>=0 &&
+            ghostWrap.style.transform.indexOf('scale(1.06)')>=0 &&
+            getComputedStyle(ghostWrap).filter.indexOf('drop-shadow')>=0);
+     S.carry=old; renderFocus();
+     return r;
+  })());
+
+  layoutBoard(false);
+  applyTune(true);   // 自检改过参数，把 DOM 恢复成与当前存档一致
+
+  S.diff=origDiff; S.wall=origWall; S.view=origView;
+  out.unshift('SELFTEST '+pass+'/'+out.length);
+  var el=$('selftest'); el.textContent=out.join('\n'); el.classList.add('on');
+}
+
+
+/* ------------------------------------------------------------
+   启动
+   ------------------------------------------------------------ */
+var qs=new URLSearchParams(location.search);
+if(qs.get('still')==='1') app.classList.add('still');
+// 验收钩子：?d=N 固定难度、?level=N 设定进度、?manual=N|auto 设手动固定。
+// 只改内存，不写 localStorage，不会污染真实用户进度。
+if(qs.has('d')) DEV_DIFF=clamp(parseInt(qs.get('d'),10)||0,0,DIFFS.length-1);
+if(qs.has('level')) progress.level=clamp(parseInt(qs.get('level'),10)||0,0,99);
+if(qs.has('manual')){
+  var mv=parseInt(qs.get('manual'),10);
+  progress.manual=isFinite(mv)?clamp(mv,0,DIFFS.length-1):null;
+}
+// ?wall=N 固定壁纸 / ?wallseq=0,1 按局取壁纸（都不写存档），
+// 让不同验收帧可以用同一张图做像素对比，过渡截图可复现。
+if(qs.has('wall')){
+  var wv=parseInt(qs.get('wall'),10);
+  if(isFinite(wv)){ S.wall=clamp(wv,0,WALLS.length-1); S.wallFixed=true; }
+  else S.wallFixed=false;
+}
+if(qs.has('wallseq')){
+  var wseq=(qs.get('wallseq')||'').split(',')
+    .map(function(x){return parseInt(x,10);})
+    .filter(function(v){return isFinite(v);})
+    .map(function(v){return clamp(v,0,WALLS.length-1);});
+  if(wseq.length){ WALL_SEQ=wseq; S.wallFixed=true; }
+}
+// ?appsel=N 指定桌面选中的图标；?idle=fast 把桌面 idle 压到 1.2 秒便于验收
+if(qs.has('appsel')) S.homeSel=clamp(parseInt(qs.get('appsel'),10)||0,0,APPS.length-1);
+if(qs.get('idle')==='fast') DEV_IDLE_MS=1200;
+/* ?img=<url>：外壳（PuzzleActivity / 屏保）把「Home 现在显示的那张图」通过虚拟图床交进来。
+   有它就只拼这一张 —— 桌面上是什么就拼什么，每日一图 / 我的照片 / 拼图壁纸都行。
+   图取不到（外壳没准备好）就退回自带四张，不留一屏黑块。 */
+var BUILTIN_WALLS = WALLS.slice();
+if(qs.get('img')){
+  WALLS=[{src:qs.get('img'), name:'当前壁纸'}];
+  S.wall=0; S.wallFixed=true;
+  (function(){
+    var probe=new Image();
+    probe.onerror=function(){
+      WALLS=BUILTIN_WALLS;
+      S.wallFixed=false;
+      if(S.view==='game'||S.view==='solved') startGame({saver:true});
+    };
+    probe.src=WALLS[0].src;
+  })();
+}
+applyTune(false);          // 注入默认 / 已存档的斜面样式
+S.diff = pickDiff();
+renderMenu();
+renderHome();          // 无论从哪一屏启动，桌面图标 DOM 都先备好
+/* ★ 拼图专用形态：这个页面只做满屏拼图。原型的「主菜单 / APP 桌面 / 居中棋盘 +
+   HUD」全部下线 —— 打开就是满屏，拼好自动换一张，永远不出现别的界面。
+   菜单键、T（外观微调）、返回键都不再进任何界面；R 重来、1/2/3 难度保留。
+   开发验收钩子 ?dev=1 才恢复原型多界面（菜单 / 桌面 / 微调面板），正常入口不带。 */
+var DEV_MODE = qs.get('dev')==='1';
+if(DEV_MODE){
+  if(qs.get('menu')==='1'){ showView('menu'); }
+  else if(qs.get('auto')==='1'||qs.get('solve')==='1'||qs.get('arranged')==='1'||qs.get('tune')==='1'){ startGame({}); }
+  else toHome();
+}else{
+  startGame({saver:true});   // 无论带不带 ?saver=1，都是同一个满屏形态
+}
+// 验收钩子：?menu=1 才显示设置菜单（真机上按返回键也能到）
+// 验收钩子：?arranged=1 展示已归位、停在棋盘的方形细缝 + 内倒角效果
+if(qs.get('arranged')==='1'){ resetGrid(); renderPositions(); }
+// 验收钩子：直接展示完成态，不影响正常启动路径
+if(qs.get('solve')==='1'){ resetGrid(); renderPositions(); onSolved(); }
+// 验收钩子：?tune=1 直接打开外观微调面板，背后铺归位预览
+if(qs.get('tune')==='1'){ resetGrid(); renderPositions(); openTune(); }
+// 验收钩子：?seq=ok,right,right,ok 依次模拟遥控器按键
+var seq=qs.get('seq');
+if(seq){
+  seq.split(',').forEach(function(a,i){
+    setTimeout(function(){
+      if(KEYCODE[a]||/^(ok|up|down|left|right|menu|back|hint|reshuffle|saver|tune|diff[123])$/.test(a)) dispatch(a);
+    },400+i*420);
+  });
+}
+// 验收钩子 ?fademid=enter|solved|next：把过渡层钉在 50%，用来目视检查
+// 「淡入中 / 细缝正融掉 / 新拼图正淡入」三种交叉状态。
+// headless --virtual-time-budget 下 WAAPI 不会平滑插值（会直接跳到终态），
+// 所以只在这里手动钉一个中间值；真机上动画由浏览器正常逐帧播放。
+if(qs.get('fademid')){
+  var fm=qs.get('fademid');
+  var seqLen=(seq||'').split(',').filter(Boolean).length;
+  setTimeout(function(){
+    cancelFade(curtain); cancelFade(fadeWall);
+    if(fm==='enter') curtain.style.opacity='.5';
+    else if(fm==='solved'||fm==='next') fadeWall.style.opacity='.5';
+  },Math.max(2400,400+seqLen*420+800));
+}
+if(qs.get('selftest')==='1') selfTest();
+// 验收钩子：?probe=1 输出遥控器交互后的真实状态，供 --dump-dom 读取
+if(qs.get('probe')==='1'){
+  // 探针要等 ?seq= 里所有模拟按键都跑完，否则会读到中间态。
+  var seqN=(qs.get('seq')||'').split(',').filter(Boolean).length;
+  var probeAt=Math.max(2400,400+seqN*420+700);
+  setTimeout(function(){
+    var p=document.createElement('pre'); p.id='puzzle-probe';
+    var storageOk=false, saved=null;
+    try{
+      localStorage.setItem('__tvp_probe','1'); localStorage.removeItem('__tvp_probe');
+      storageOk=true; saved=localStorage.getItem(PROGRESS_KEY);
+    }catch(e){}
+    p.textContent=JSON.stringify({
+      view:S.view,cursor:S.cursor,carry:S.carry,cols:S.cols,rows:S.rows,
+      gap:S.gap,bevel:S.bevel,bw:S.bw,bh:S.bh,full:(S.bw===1920),
+      tune:TUNE,tuning:S.tuning,grid:S.grid.join(','),
+      focus:focusEl.style.transform, ghost:ghostWrap.style.transform,
+      ghostOn:ghostWrap.classList.contains('on'), saver:S.saver,
+      homeSel:S.homeSel,appCount:APPS.length,
+      appId:APPS[S.homeSel].id,
+      iconFocusOpacity:(function(){
+        var e=document.querySelector('.appIcon.on');return e?+getComputedStyle(e).opacity:null;})(),
+      iconRestOpacity:(function(){
+        var e=document.querySelector('.appIcon:not(.on)');return e?+getComputedStyle(e).opacity:null;})(),
+      iconOnCount:document.querySelectorAll('.appIcon.on').length,
+      iconFocusTransform:(function(){
+        var e=document.querySelector('.appIcon.on');return e?getComputedStyle(e).transform:null;})(),
+      iconFocusW:(function(){
+        var e=document.querySelector('.appIcon.on');return e?e.offsetWidth:null;})(),
+      iconRestW:(function(){
+        var e=document.querySelector('.appIcon:not(.on)');return e?e.offsetWidth:null;})(),
+      homeWallBg:$('homeWall').style.backgroundImage,
+      diff:S.diff,diffName:DIFFS[S.diff].name,diffLabel:diffLabel(),
+      currentDiff:currentDiff(),autoDiff:autoDiff(),diffChoice:diffChoice(),
+      level:progress.level,manual:progress.manual,devDiff:DEV_DIFF,
+      storageOk:storageOk,savedProgress:saved,
+      solvedText:$('solvedStat').textContent,
+      curtain:+curtain.style.opacity, fadeWall:+fadeWall.style.opacity,
+      wallUp:S.wallUp, fade:FADE,
+      fadeWallBg:fadeWall.style.backgroundImage,
+      saverSolved:app.classList.contains('saverSolved'),
+      gameDisplay:getComputedStyle($('game')).display
+    });
+    document.body.appendChild(p);
+  },probeAt);
+}
+window.__puzzle=S;   // 调试探针
+})();
+</script>
+</body>
+</html>

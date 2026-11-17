@@ -37,7 +37,8 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-enum class WallpaperKind { Daily, Builtin, Photo, Auto, Live, Video, Source }
+/** Puzzle is one of the four pictures bundled with the TV puzzle game, kept in assets. */
+enum class WallpaperKind { Daily, Builtin, Photo, Live, Video, Source, Puzzle }
 
 data class Wallpaper(
     val id: String,
@@ -49,7 +50,8 @@ data class Wallpaper(
 
 /** System: none of Aerial's; the TV's own screensaver starts as the firmware has it (SystemScreensaver). */
 enum class ScreensaverMode(val key: String) {
-    Aerial("aerial"), Photos("photos"), Clock("clock"), Videos("videos"), System("system");
+    /** Puzzle: the wallpaper as a jigsaw, shuffled and played with the remote (ui/home/Screensaver.kt). */
+    Aerial("aerial"), Photos("photos"), Clock("clock"), Videos("videos"), Puzzle("puzzle"), System("system");
 
     companion object {
         fun of(key: String?) = entries.firstOrNull { it.key == key } ?: Aerial
@@ -60,12 +62,12 @@ enum class ScreensaverMode(val key: String) {
  * Everything behind the home screen: which wallpaper is chosen, where pictures come from, and what
  * the screensaver shows. Sources:
  *
- * - Built-in: Aerial's own Mac-style pictures, drawn on the TV ([Gradients]).
+ * - Built-in: Aerial's own Mac-style pictures, drawn on the TV ([Gradients]); only the dark one
+ *   the TV inputs sit on is kept, none of them are offered in Personalize any more.
  * - Daily: Bing's photo of the day (cn.bing.com, reachable from China without a proxy). The last
  *   eight are kept; "daily:latest" always follows the newest.
  * - Photos: pictures uploaded from a phone through the setup page ([PhoneServer]). "photos:rotate"
  *   shows a different one of them each day (issue #27).
- * - Auto: the previous behaviour, light taken from the focused app's artwork.
  * - Live: Apple's aerial films, moving once Home has sat still a while (ui/home/LiveWallpaper.kt).
  *   Its picture is the frame the film last stopped on, so the glass and the grid match it.
  * - Video: the owner's own films, sent from the phone (ScreensaverVideos), moving the same way
@@ -83,27 +85,46 @@ object Wallpapers {
     /** A video's poster (#1158): sharp enough for its card, small to keep (about 60 KB). */
     private const val POSTER_W = 960
     private const val POSTER_H = 540
-    const val AUTO = "auto"
     const val ROTATE_PHOTOS = "photos:rotate"
     const val LIVE = "aerial:live"
     const val VIDEOS = "videos:mine"
     const val VIDEO_PREFIX = "video:"
     const val SOURCE_PREFIX = "source:"
+    const val PUZZLE_PREFIX = "puzzle:"
+    /**
+     * The four pictures the TV puzzle game plays, offered as one Home wallpaper named "Puzzle
+     * Wallpapers", the way Aerial is one for its films: the picker shows a single tile, and it
+     * takes a different one of the four each day ([puzzleSlot]). The individual ids
+     * ("puzzle:wall-01") are still understood by [puzzlePicture], but no longer listed.
+     * Bundled in assets/puzzle; [Images.cover] scales them to whatever the TV's UI is.
+     */
+    const val PUZZLE_WALL = "puzzle"
+    private val PUZZLE_PICTURES = listOf(
+        "wall-01" to ("沙丘 · 巨环与旅人" to "Dunes · The Great Ring"),
+        "wall-02" to ("星野 · 巨构与花田" to "Starfield · Megastructure"),
+        "wall-03" to ("帆影 · 云海与水下光" to "Sails · Sea of Clouds"),
+        "wall-04" to ("林间 · 光隙与小精灵" to "Woodland · Light Gaps"),
+    )
+    /**
+     * Mean brightness under which the puzzle tiles would be a nearly black board. A live film
+     * before its first decoded frame leaves a dark night gradient here, and a dark photo of the
+     * owner's would be just as unplayable, so both play a bundled bright picture instead.
+     */
+    private const val PUZZLE_MIN_LUMA = 55
     /** The picture under a TV input's, for the glass and while the input has nothing to show. */
     private const val SOURCE_PICTURE = "hills_night"
-    private const val FOLLOW = "follow"
-    private const val DEFAULT_FALLBACK = "grad:aurora"
+    const val FOLLOW = "follow"
+    /** The file the wallpaper choice and the screensaver kind are kept in (Wallpapers, AerialSettings). */
+    const val PREFS = "wallpaper"
+    private const val DEFAULT_FALLBACK = LATEST_DAILY
 
     /** Let go this close to where the picture was taken: the film did not move on from it. */
     private const val SAME_SPOT_MS = 2_000L
 
-    /** The built-ins Personalize offers, one or two of each family; the rest stay for whoever chose them. */
-    val FEATURED_BUILTINS = setOf("grad:hills_dawn", "grad:hills_night", "grad:dunes_gold", "grad:sea_sunset", "grad:waves_blue", "grad:aurora")
-
     private lateinit var app: Context
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val io = Mutex()
-    private val prefs by lazy { app.getSharedPreferences("wallpaper", Context.MODE_PRIVATE) }
+    private val prefs by lazy { app.getSharedPreferences(PREFS, Context.MODE_PRIVATE) }
     private val dailyDir by lazy { File(app.filesDir, "daily").apply { mkdirs() } }
     private val photoDir by lazy { File(app.filesDir, "photos").apply { mkdirs() } }
     private val liveFrame by lazy { File(app.filesDir, "live-frame.jpg") }
@@ -120,15 +141,20 @@ object Wallpapers {
     private var chosenScreensaver by mutableStateOf<ScreensaverMode?>(ScreensaverMode.Aerial)
 
     /**
-     * The screensaver in effect. Until one is chosen it follows the wallpaper: aerial films with the
-     * aerial wallpaper (and in "Follow App", which has no picture), photos with a picture, starting
-     * from that picture.
+     * The screensaver in effect. The puzzle takes it over while its own switch is on, whatever kind
+     * was chosen and whatever the wallpaper. Otherwise, until one is chosen it follows the
+     * wallpaper: aerial films with the aerial wallpaper (and in "Follow App", which has no picture),
+     * photos with a picture, starting from that picture.
      */
     val screensaver: ScreensaverMode
-        get() = chosenScreensaver ?: when {
-            isVideo(selectedId) -> ScreensaverMode.Videos
-            selectedId == LIVE || selectedId == AUTO || isSource(selectedId) -> ScreensaverMode.Aerial
-            else -> ScreensaverMode.Photos
+        get() {
+            if (AerialSettings.puzzleSaver) return ScreensaverMode.Puzzle
+            chosenScreensaver?.let { return it }
+            return when {
+                isVideo(selectedId) -> ScreensaverMode.Videos
+                selectedId == LIVE || isSource(selectedId) -> ScreensaverMode.Aerial
+                else -> ScreensaverMode.Photos
+            }
         }
 
     /** A wallpaper that moves behind Home (aerial films, the owner's videos), with a frame as its picture. */
@@ -164,7 +190,7 @@ object Wallpapers {
     /** No screensaver chosen: it follows the wallpaper. */
     val screensaverFollows: Boolean get() = chosenScreensaver == null
 
-    /** The home backdrop for the selection, shading baked in; null while loading or in Auto. */
+    /** The home backdrop for the selection, shading baked in; null while loading. */
     var backdrop by mutableStateOf<ImageBitmap?>(null); private set
 
     /**
@@ -202,13 +228,22 @@ object Wallpapers {
         started = true
         app = context.applicationContext
         measure(context).let { (w, h) -> screenW = w; screenH = h }
-        selectedId = (prefs.getString("selected", LATEST_DAILY) ?: LATEST_DAILY)
-            // A built-in wallpaper from before the Mac-style set: its nearest one now.
-            .let { if (it.startsWith("grad:")) "grad:" + Gradients.currentKey(it.removePrefix("grad:")) else it }
+        // The puzzle wallpapers, "Follow App" and the AI picture that came to stand for them gave
+        // way to Bing's daily photo: a Home that had one of them chosen moves on to that rather
+        // than losing its picture.
+        val saved = prefs.getString("selected", null)
+        fun movedOn(id: String?) = id != null &&
+            (id.startsWith(PUZZLE_PREFIX) || id == PUZZLE_WALL || id == "auto" || id == "ai")
+        selectedId = if (movedOn(saved)) LATEST_DAILY else saved ?: LATEST_DAILY
+        if (movedOn(saved)) prefs.edit { putString("selected", LATEST_DAILY) }
         chosenScreensaver = when (val key = prefs.getString("screensaver", null)) {
             null -> firstScreensaver()
             // "wallpaper" was a fourth kind in test builds of 1.38, for what following now is.
             FOLLOW, "wallpaper" -> null
+            // The puzzle was one of the kinds until it became a switch of its own (AerialSettings,
+            // which starts after this). Following the wallpaper here; AerialSettings turns the
+            // switch on and rewrites this key, so turning it off later gives the normal screensaver.
+            ScreensaverMode.Puzzle.key -> null
             else -> ScreensaverMode.of(key)
         }
         rebuildList()
@@ -277,9 +312,17 @@ object Wallpapers {
 
     /** The wallpaper's picture, when the photo screensaver starts from it: a picture wallpaper, not the aerial one. */
     fun screensaverPicture(): Wallpaper? =
-        if (screensaver != ScreensaverMode.Photos || moves() || isSource() || selectedId == AUTO) null else resolve()
+        if (screensaver != ScreensaverMode.Photos || moves() || isSource()) null else resolve()
 
     fun chooseScreensaver(mode: ScreensaverMode) {
+        // The puzzle is a switch of its own now (AerialSettings.puzzleSaver): choosing it turns the
+        // switch on, and choosing any other kind turns it off, which is what "back to the normal
+        // screensaver" means.
+        if (mode == ScreensaverMode.Puzzle) {
+            AerialSettings.choosePuzzleSaver(true)
+            return
+        }
+        AerialSettings.choosePuzzleSaver(false)
         chosenScreensaver = mode
         prefs.edit { putString("screensaver", mode.key) }
         GuardSetup.screensaverModeChanged(app)
@@ -311,12 +354,14 @@ object Wallpapers {
     private var rotatedOn = Long.MIN_VALUE
 
     /**
-     * Moves "My Photos, in turn" on to the photo for now; Aerial calls it whenever Home comes back,
-     * and each minute while Home is in front.
+     * Moves "My Photos, in turn" on to the photo for now, and "Puzzle Wallpapers" on to the day's
+     * picture; Aerial calls it whenever Home comes back, and each minute while Home is in front.
      */
     fun rotateIfDue() {
-        if (!started || selectedId != ROTATE_PHOTOS || rotatedOn == photoSlot()) return
-        rebuildBackdrop()
+        if (!started) return
+        if (selectedId == ROTATE_PHOTOS && rotatedOn != photoSlot()) { rebuildBackdrop(); return }
+        // A TV left on overnight keeps the picture it baked yesterday until Home looks again.
+        if (selectedId == PUZZLE_WALL && rotatedOn != puzzleSlot()) rebuildBackdrop()
     }
 
     // ---- pictures ----
@@ -325,6 +370,57 @@ object Wallpapers {
         WallpaperKind.Daily -> File(dailyDir, w.id.removePrefix("daily:") + ".jpg")
         WallpaperKind.Photo -> File(photoDir, w.id.removePrefix("photo:") + ".jpg")
         else -> null
+    }
+
+    /**
+     * Whether Home shows a picture of its own the puzzle can be made of. Cheap — no picture is
+     * decoded.
+     */
+    fun hasPictureToPuzzle(): Boolean = started
+
+    /**
+     * The picture Home is showing, as JPEG bytes at [w]×[h], for the puzzle game's WebView. The
+     * page is a file:// document and cannot read the app's private storage, where Bing's daily
+     * download and the owner's photos live, so its shell serves this (PuzzleShell). Call off the
+     * main thread. Null when Home has nothing to show.
+     */
+    fun currentPictureJpeg(w: Int, h: Int): ByteArray? {
+        if (!started) return null
+        val wp = resolve(selectedId) ?: return null
+        var bmp = picture(wp, w, h) ?: return null
+        // A placeholder gradient (a live film not yet decoded, a video with no frame) or a very
+        // dark picture leaves every tile almost black. Play a bundled bright one so the board is
+        // always solvable; Home still shows its own wallpaper, only the game swaps its source.
+        val placeholder = (wp.kind == WallpaperKind.Live && !liveFrame.exists()) ||
+            (wp.kind == WallpaperKind.Video && !videoFrameIsOf(wp.id))
+        if (placeholder || meanLuma(bmp) < PUZZLE_MIN_LUMA) {
+            puzzlePicture("wall-01", w, h)?.let { bright ->
+                bmp.recycle()
+                bmp = bright
+            }
+        }
+        return runCatching {
+            java.io.ByteArrayOutputStream().use { out ->
+                bmp.compress(Bitmap.CompressFormat.JPEG, 92, out)
+                out.toByteArray()
+            }
+        }.also { bmp.recycle() }.getOrNull()
+    }
+
+    /** Mean brightness of a picture, 0..255, sampled down so a 4K TV frame is cheap to score. */
+    private fun meanLuma(src: Bitmap): Int {
+        val small = Bitmap.createScaledBitmap(src, 32, 32, true)
+        val px = IntArray(32 * 32)
+        small.getPixels(px, 0, 32, 0, 0, 32, 32)
+        if (small !== src) small.recycle()
+        var sum = 0
+        for (c in px) {
+            val r = (c shr 16) and 0xFF
+            val g = (c shr 8) and 0xFF
+            val b = c and 0xFF
+            sum += (r * 299 + g * 587 + b * 114) / 1000
+        }
+        return sum / px.size
     }
 
     /**
@@ -339,13 +435,38 @@ object Wallpapers {
     fun picture(wp: Wallpaper, w: Int, h: Int): Bitmap? = when (wp.kind) {
         WallpaperKind.Builtin -> Gradients.byKey(wp.id.removePrefix("grad:"))?.let { Gradients.render(it, w, h) }
         WallpaperKind.Daily, WallpaperKind.Photo -> fileFor(wp)?.takeIf { it.exists() }?.let { Images.decodeCover(it, w, h) }
-        WallpaperKind.Auto -> null
         // Until a film has stopped on a frame, the first built-in stands in.
         WallpaperKind.Live -> liveFrame.takeIf { it.exists() }?.let { Images.decodeCover(it, w, h) }
             ?: Gradients.render(Gradients.presets.first(), w, h)
         WallpaperKind.Video -> videoPicture(wp.id, w, h) ?: Gradients.render(Gradients.presets.first(), w, h)
         WallpaperKind.Source -> Gradients.byKey(SOURCE_PICTURE)?.let { Gradients.render(it, w, h) }
+        WallpaperKind.Puzzle -> puzzlePicture(wp.id, w, h)
     }
+
+    /**
+     * One of the bundled puzzle pictures. Decoded from assets (never a file the owner can delete)
+     * and centre-cropped to the TV's UI size, so every wallpaper path - Home's backdrop, its
+     * frosted glass, the card in Personalize and the photo screensaver - gets the same picture.
+     */
+    private fun puzzlePicture(id: String, w: Int, h: Int): Bitmap? {
+        // "Puzzle Wallpapers" is one wallpaper for four pictures: it takes the day's, so the Home
+        // picture changes once a day instead of standing still on one of them for ever.
+        val name = if (id == PUZZLE_WALL) puzzleToday()
+        else id.removePrefix(PUZZLE_PREFIX).takeIf { n -> PUZZLE_PICTURES.any { it.first == n } } ?: return null
+        return runCatching {
+            app.assets.open("puzzle/$name.jpg").use { input ->
+                BitmapFactory.decodeStream(input)?.let { src ->
+                    Images.cover(src, w, h).also { out -> if (out !== src) src.recycle() }
+                }
+            }
+        }.getOrNull()
+    }
+
+    /** Which of the four pictures "Puzzle Wallpapers" shows today: the day, counted round them. */
+    private fun puzzleSlot(): Long = java.time.LocalDate.now().toEpochDay()
+
+    /** The bundled picture "Puzzle Wallpapers" shows today, by asset name ("wall-01".."wall-04"). */
+    fun puzzleToday(): String = PUZZLE_PICTURES[Math.floorMod(puzzleSlot(), PUZZLE_PICTURES.size)].first
 
     /** The frame one of [id]'s films last stopped on, else the first film's poster or opening frame. */
     private fun videoPicture(id: String, w: Int, h: Int): Bitmap? =
@@ -401,7 +522,6 @@ object Wallpapers {
         val version = pictureVersion
         val wp = (if (id == LATEST_DAILY || id == ROTATE_PHOTOS) resolve(id) else items.firstOrNull { it.id == id }) ?: return null
         val b = when (wp.kind) {
-            WallpaperKind.Auto -> Gradients.render(Gradients.autoThumb, 384, 216)
             // Not kept while no frame of the film can be had: the next look tries again (issue #1158).
             WallpaperKind.Video -> videoPicture(id, 384, 216) ?: return Gradients.render(Gradients.presets.first(), 384, 216)
             else -> picture(wp, 384, 216)
@@ -414,11 +534,6 @@ object Wallpapers {
         backdropJob?.cancel()
         val id = selectedId
         backdropJob = scope.launch {
-            if (id == AUTO) {
-                backdrop = null
-                frosted = null
-                return@launch
-            }
             rotatedOn = photoSlot()
             val wp = resolve(id) ?: resolve(DEFAULT_FALLBACK)
             val key = wp?.let(::bakedKey)
@@ -454,6 +569,8 @@ object Wallpapers {
             WallpaperKind.Daily, WallpaperKind.Photo -> fileFor(wp)?.lastModified() ?: 0L
             WallpaperKind.Live -> liveFrame.lastModified()
             WallpaperKind.Video -> if (videoFrameIsOf(wp.id)) videoFrame.lastModified() else 0L
+            // "Puzzle Wallpapers" takes a different picture each day: the day is part of the bake.
+            WallpaperKind.Puzzle -> if (wp.id == PUZZLE_WALL) puzzleSlot() else 0L
             else -> 0L
         }
         // "clear": a film's picture baked unshaded, not one kept from when it was shaded.
@@ -467,7 +584,6 @@ object Wallpapers {
      * one crossfades in once baked. Not in "Follow App", which has no backdrop.
      */
     private fun loadBaked() {
-        if (selectedId == AUTO) return
         runCatching {
             val key = File(bakedDir, "key").takeIf { it.exists() }?.readText() ?: return
             val home = BitmapFactory.decodeFile(File(bakedDir, "home.jpg").path) ?: return
@@ -506,7 +622,7 @@ object Wallpapers {
         val copy = lockedBootBackdrop(app) ?: return
         runCatching {
             val home = File(bakedDir, "home.jpg")
-            if (selectedId == AUTO || !home.exists()) { copy.delete(); return }
+            if (!home.exists()) { copy.delete(); return }
             if (copy.exists() && copy.lastModified() >= home.lastModified()) return
             val part = File(copy.parentFile, copy.name + ".part")
             home.copyTo(part, overwrite = true)
@@ -791,11 +907,9 @@ object Wallpapers {
     private fun rebuildList() {
         val daily = readDailyIndex().map { Wallpaper("daily:${it.first}", WallpaperKind.Daily, it.second, it.third) }
         val zh = Locale.getDefault().language == "zh"
-        val builtins = Gradients.presets.map { Wallpaper("grad:${it.key}", WallpaperKind.Builtin, if (zh) it.nameZh else it.nameEn) }
         val photos = (photoDir.listFiles { f -> f.extension == "jpg" } ?: emptyArray())
             .sortedByDescending { it.lastModified() }
             .map { Wallpaper("photo:${it.nameWithoutExtension}", WallpaperKind.Photo, if (zh) "我的照片" else "My Photo") }
-        val auto = Wallpaper(AUTO, WallpaperKind.Auto, if (zh) "跟随 App" else "Follow App")
         val live = Wallpaper(LIVE, WallpaperKind.Live, if (zh) "航拍" else "Aerial")
         // All of them in turn, then each on its own (#762); the pickers show the first only for two or more.
         val films = ScreensaverVideos.all(app)
@@ -803,7 +917,7 @@ object Wallpapers {
             listOf(Wallpaper(VIDEOS, WallpaperKind.Video, if (zh) "我的视频 · 轮播" else "My Videos, In Turn")) +
                 films.map { Wallpaper(VIDEO_PREFIX + it.id, WallpaperKind.Video, it.name.substringBeforeLast('.').ifBlank { it.name }) }
         val inputs = sources.map { (id, name) -> Wallpaper(SOURCE_PREFIX + id, WallpaperKind.Source, name) }
-        items = listOf(live) + videos + daily + builtins + photos + auto + inputs
+        items = listOf(live) + videos + daily + photos + inputs
     }
 
     // ---- daily photos ----
@@ -902,10 +1016,10 @@ object Wallpapers {
         }
     }
 
-    private fun get(url: String): ByteArray {
+    private fun get(url: String, timeoutMs: Int = 20_000): ByteArray {
         val c = URL(url).openConnection() as HttpURLConnection
         c.connectTimeout = 10_000
-        c.readTimeout = 20_000
+        c.readTimeout = timeoutMs
         return c.inputStream.use { it.readBytes() }.also { c.disconnect() }
     }
 

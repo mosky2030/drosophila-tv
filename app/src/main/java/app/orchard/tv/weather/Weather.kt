@@ -11,6 +11,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -41,8 +42,10 @@ object Weather {
     private const val REFRESH_MS = 60 * 60 * 1000L
     private const val RETRY_MS = 10 * 60 * 1000L
     private const val RELOCATE_MS = 24 * 60 * 60 * 1000L
-    /** A reading older than this is not shown at all. */
-    private const val STALE_MS = 3 * 60 * 60 * 1000L
+    /** A reading older than this is not shown at all. Half a day: the service went unreachable
+     *  for whole mornings (2026-11-16, Open-Meteo timing out from China), and a clock without
+     *  weather was worse than one with a reading a few hours old (the owner). */
+    private const val STALE_MS = 12 * 60 * 60 * 1000L
     /** Stands for "no high or low" in the prefs. */
     private const val NONE = Int.MIN_VALUE
 
@@ -60,6 +63,7 @@ object Weather {
     private var started = false
     private var lastAttempt = 0L
     private var job: Job? = null
+    private var retry: Job? = null
 
     fun init(context: Context) {
         if (started) return
@@ -105,6 +109,16 @@ object Weather {
                     putBoolean("day", reading.day)
                     putInt("high", reading.high ?: NONE)
                     putInt("low", reading.low ?: NONE)
+                }
+            } else {
+                // A failed reading tries again on its own in ten minutes: Home's coming to the
+                // front and the network coming up are not the only moments a dead service returns,
+                // and the full-screen clock sat without weather all morning while nothing fetched
+                // again (the owner, 2026-11-16). The gate on [lastAttempt] keeps this from stacking
+                // with a refresh Home asked for.
+                retry = scope.launch {
+                    delay(RETRY_MS)
+                    if (failed && System.currentTimeMillis() - lastAttempt >= RETRY_MS) refresh()
                 }
             }
         }

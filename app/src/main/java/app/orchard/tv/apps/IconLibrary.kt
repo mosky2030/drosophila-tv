@@ -21,10 +21,12 @@ import java.net.URL
  * Ready-made 16:9 tile pictures for popular apps, from the website (issues #575 #429 #307: tiles
  * drawn from an app's own icon read rougher than other launchers' hand-made ones). The site keeps
  * an index of package → pictures; Aerial reads it at most twice a day and downloads only the
- * pictures of apps installed on this TV, into files/library. A picture the owner chose on the
- * phone page (CustomIcons) still wins. Every app with a picture here uses it, unless the phone page
- * picked the app's own art for it. (Personalize had a switch for all apps at once until 1.55; with
- * most apps picked one by one it seemed to do nothing, and it was dropped.)
+ * pictures of apps installed on this TV, into files/library.
+ *
+ * Off by default: a tile shows the app's own icon unless the owner picks a picture here for it on
+ * the phone page (the owner: 「原版aerial会给有些app换一个图标图案(问题主要出现在tvbox)…先把这个机制删除
+ * 吧，都使用APP本身的图标图案」). Every app with a picture here used to take it automatically, which
+ * is what made TVBox and others show something other than their icon.
  *
  * An app can have several pictures (index v2, #706), each credited to where it came from (a
  * contributor, the app's tvOS version, Aerial itself). The first is the default; the phone page
@@ -93,12 +95,11 @@ object IconLibrary {
         return c?.let(::here)
     }
 
-    /** Whether [pkg]'s tile uses the library: unless the phone page picked the app's own art. */
-    fun uses(pkg: String): Boolean = when (pick(pkg)) {
-        Pick.Library -> true
-        Pick.Own -> false
-        null -> true
-    }
+    /**
+     * Whether [pkg]'s tile uses the library: only once the phone page picked its picture. Left
+     * unpicked, the tile is the app's own icon (see this object's note).
+     */
+    fun uses(pkg: String): Boolean = pick(pkg) == Pick.Library
 
     private fun usable(pkg: String): File? = if (uses(pkg)) file(pkg) else null
 

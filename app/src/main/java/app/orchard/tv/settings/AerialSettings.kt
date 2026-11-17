@@ -8,26 +8,15 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.edit
 import android.os.SystemClock
 import android.provider.Settings
+import app.orchard.tv.BuildConfig
 import app.orchard.tv.apps.IconLibrary
 import app.orchard.tv.guard.GuardSetup
 import app.orchard.tv.system.DeviceClass
 import app.orchard.tv.wallpaper.AerialQuality
+import app.orchard.tv.wallpaper.ScreensaverMode
+import app.orchard.tv.wallpaper.Wallpapers
+import app.orchard.tv.weather.Weather
 import java.security.MessageDigest
-
-/**
- * How the focused app shows itself, named after tvOS's Accessibility > Increase Contrast > Focus Style.
- *
- * tvOS's standard focus relies on the Siri Remote's touch surface: the icon tilts with the thumb, and
- * that motion is what the eye follows. With the D-pad remotes these TVs ship with, the icon only
- * grows, and owners lost track of it. High Contrast adds a white frame and is the default here.
- */
-enum class FocusStyle(val key: String) {
-    Standard("standard"), HighContrast("high_contrast");
-
-    companion object {
-        fun of(key: String?) = entries.firstOrNull { it.key == key } ?: HighContrast
-    }
-}
 
 /**
  * Where interface sounds come from. The TV's own are silent wherever its key sound setting is off,
@@ -69,16 +58,98 @@ enum class ClockHours(val key: String) {
     }
 }
 
+/**
+ * How large Home's clock is: the corner-line small one, the lock-screen one above the top row,
+ * that one a size up, or the time alone at nearly the screen's width, over the icons.
+ */
+enum class ClockSize { Small, Large, XL, Full;
+
+    companion object {
+        fun of(key: String?): ClockSize? = when (key) {
+            "small" -> Small; "large" -> Large; "xl" -> XL; "full" -> Full
+            else -> null
+        }
+    }
+}
+
+/**
+ * An extra, opt-in look for Home's app tiles, from the TV puzzle prototype: Original leaves every
+ * one of Aerial's own Home styles exactly as they are; Translucent dims the unfocused tiles into
+ * the wallpaper and keeps the focused one fully opaque, the way glass icons read on Apple TV.
+ *
+ * [Dock] is the one that changes Home's shape rather than its glass: every app on one long bar of
+ * glass at the bottom, square icons, the focused one grown with its neighbours stepping down in
+ * size, and the folders kept together at the bar's right end. Rooms inside that bar are taken from
+ * the screen: one size fits all, so the more apps, the smaller the icons.
+ *
+ * [Wheel] is a short bar of the same square icons, a few at a time, the focused one held in the
+ * middle of the screen while the row slides through it: Left and Right turn the wheel rather than
+ * walk the focus along, and the icons further from the middle fade back as they go.
+ */
+enum class IconStyle(val key: String) {
+    Original("original"), Translucent("translucent"), Dock("dock"), Wheel("wheel"), Hidden("hidden");
+
+    companion object {
+        fun of(key: String?) = entries.firstOrNull { it.key == key } ?: Original
+    }
+}
+
+/**
+ * Where Home's clock sits: the two top corners, or the middle of the top edge. The full-screen
+ * clock (§满屏) ignores it — it is centred by design, over the icons.
+ */
+enum class ClockPlace(val key: String) {
+    Left("left"), Center("center"), Right("right");
+
+    companion object {
+        fun of(key: String?) = entries.firstOrNull { it.key == key } ?: Center
+    }
+}
+
+/**
+ * How every app's icon is drawn, one look for the whole of Home (the owner: 「现在各种APP图标
+ * 颜色乱七八糟…统一图标风格」).
+ *
+ * [Original] keeps the icon as the app drew it: its own plate carried across the tile and its own
+ * mark, in its own colors. [Dopamine] gives every app a bright, saturated plate of its own (the
+ * same one every time, from the package name) and keeps the mark as it is. A frosted-glass look
+ * was tried between these and taken out again (the owner: 「磨砂玻璃效果还是不行，先删除吧，多巴胺
+ * 保留」); a choice saved as it falls back to [Original].
+ */
+enum class IconLook(val key: String) {
+    Original("original"), Dopamine("dopamine");
+
+    companion object {
+        fun of(key: String?) = entries.firstOrNull { it.key == key } ?: Original
+    }
+}
+
+/**
+ * What Back does on Home's top row (the owner: 「个性化菜单里的返回键，删除后面的休眠功能」).
+ * Sleep was an option and was taken out; a saved "sleep" value falls back to [Screensaver].
+ */
+enum class BackAction(val key: String) {
+    /** Starts the screensaver, as on tvOS. */
+    Screensaver("saver"),
+
+    /** Nothing, for homes where Back gets pressed by accident (issue #94). */
+    Off("off");
+
+    companion object {
+        fun of(key: String?) = entries.firstOrNull { it.key == key } ?: Screensaver
+    }
+}
+
 /** Aerial's own preferences. Compose state, written on the main thread only. */
-object AerialSettings {
-    private const val PREFS = "settings"
+object AerialSettings {    private const val PREFS = "settings"
     private var started = false
     private lateinit var app: Context
 
-    private var chosenFocusStyle by mutableStateOf(FocusStyle.HighContrast)
+    /** Opt-in tile look; Original is the default, so an existing Home never changes on upgrade. */
+    var iconStyle by mutableStateOf(IconStyle.Original); private set
 
-    /** The style chosen; always the white frame in Elders mode (Restricted), where it is easiest to see (#969). */
-    val focusStyle: FocusStyle get() = if (Restricted.active && Restricted.kind == RestrictedKind.Elders) FocusStyle.HighContrast else chosenFocusStyle
+    /** How every app's icon is drawn (see [IconLook]); the app's own icon unless changed. */
+    var iconLook by mutableStateOf(IconLook.Original); private set
 
 
     /**
@@ -111,17 +182,18 @@ object AerialSettings {
     /**
      * Only the top row on Home, low on the screen, so the wallpaper (a family photo) shows above it,
      * as tvOS does under a full-screen top shelf. The rest of the grid is one press down.
+     * No longer a setting: Aerial always lays Home out this way.
      */
-    var oneRowHome by mutableStateOf(true); private set
+    val oneRowHome = true
 
     /**
-     * Apps a row on Home: [HOME_COLUMNS], five by default as Aerial always had, six as tvOS 26 lays
-     * them out, four for bigger tiles from the sofa. Folders follow it.
+     * Apps a row on Home: six, as tvOS 26 lays them out. No longer a setting, so a Home keeps the
+     * same rhythm whatever was chosen before.
      */
-    private var chosenColumns by mutableIntStateOf(DEFAULT_HOME_COLUMNS)
+    private const val DEFAULT_HOME_COLUMNS = 6
 
-    /** The number chosen; [Restricted.COLUMNS] in Kids and Elders mode, for bigger tiles from the sofa. */
-    val homeColumns: Int get() = if (Restricted.active) Restricted.COLUMNS else chosenColumns
+    /** The number in effect; [Restricted.COLUMNS] in Kids and Elders mode, for bigger tiles from the sofa. */
+    val homeColumns: Int get() = if (Restricted.active) Restricted.COLUMNS else DEFAULT_HOME_COLUMNS
 
     /**
      * Home shows only its first this many tiles, for trying a nearly empty Home on a TV that has
@@ -130,8 +202,8 @@ object AerialSettings {
      */
     var previewApps by mutableIntStateOf(0)
 
-    /** In one-row mode, the top of the second row peeking under the first; off hides it until you go down. */
-    var peekNextRow by mutableStateOf(true); private set
+    /** In one-row mode, the top of the second row peeking under the first. Always on now. */
+    val peekNextRow = true
 
     /** Interface sounds (system/Sounds), as tvOS plays them on every press. */
     var uiSounds by mutableStateOf(UiSounds.Tv); private set
@@ -147,14 +219,38 @@ object AerialSettings {
      */
     var homeLocked by mutableStateOf(false); private set
 
-    /** The Liquid Glass plate under the top row; some prefer the apps straight on the wallpaper (#151). */
-    var homePlate by mutableStateOf(true); private set
+    /** The Liquid Glass plate under the top row. Always on now: glass under the apps. */
+    val homePlate = true
 
-    /** The clock, with the date and weather, in the top right instead of the top left. */
-    var clockRight by mutableStateOf(false); private set
+    /** Where the clock, with the date and weather, sits: either top corner or the top middle. */
+    var clockPlace by mutableStateOf(ClockPlace.Center); private set
 
     /** The date and weather over a big clock above the top row, instead of one small line in the corner. */
     var largeClock by mutableStateOf(false); private set
+
+    /** The shelf clock a size up ("超大"): the same clock at a bigger print, where the room allows it. */
+    var clockXL by mutableStateOf(false); private set
+
+    /** The time alone, at nearly the screen's width ("满屏"), clear of the icons above them. */
+    var clockFull by mutableStateOf(false); private set
+
+    /** The size the booleans make: the small corner line, the shelf clock, that one a size up, or the full one. */
+    val clockSize: ClockSize
+        get() = when {
+            !largeClock -> ClockSize.Small
+            clockFull -> ClockSize.Full
+            clockXL -> ClockSize.XL
+            else -> ClockSize.Large
+        }
+
+    /**
+     * The Chinese calendar's date after the date on the clock ("十月初七"). Off unless asked for:
+     * a TV in a household that does not read it should not carry it.
+     */
+    var clockLunar by mutableStateOf(false); private set
+
+    /** The solar term the day falls in, after the date ("立冬"), where it is set to be shown. */
+    var clockTerm by mutableStateOf(false); private set
 
     /**
      * How often "My Photos, in turn" moves to the next photo, in minutes; a day (1440) unless the
@@ -181,14 +277,22 @@ object AerialSettings {
      */
     var screensaverClock by mutableStateOf(true); private set
 
+    /**
+     * The screensaver is the puzzle: Home's picture as a jigsaw, shuffled, played with the remote
+     * (ui/home/Screensaver.kt). A switch of its own rather than one of the kinds, so it takes the
+     * screensaver over whatever kind was chosen, and whatever the wallpaper: Bing's picture of the
+     * day, one of the owner's own photos, or the bundled puzzle set. Off puts the chosen kind back.
+     */
+    var puzzleSaver by mutableStateOf(false); private set
+
     /** Every app's name under its tile, not only the focused one's (issue #28), the top row's on the glass plate too. */
     private var chosenAllNames by mutableStateOf(false)
 
     /** As chosen; always every name in Elders mode (Restricted). */
     val showAllNames: Boolean get() = chosenAllNames || (Restricted.active && Restricted.kind == RestrictedKind.Elders)
 
-    /** Back on Home's top row starts the screensaver, as on tvOS; off for homes where it gets pressed by accident (issue #94). */
-    var backStartsScreensaver by mutableStateOf(true); private set
+    /** What Back on Home's top row does (see [BackAction]); the screensaver unless changed (issue #94). */
+    var backAction by mutableStateOf(BackAction.Screensaver); private set
 
     /**
      * Parental PIN (issue #10): asked before TV settings open and before hidden apps come back.
@@ -207,15 +311,17 @@ object AerialSettings {
     private const val UNLOCK_MS = 10 * 60 * 1000L
 
     /**
-     * Minutes of no input on Home before Aerial's screensaver starts (issue #66). The firmware's own
+     * Seconds of no input on Home before Aerial's screensaver starts (issue #66). The firmware's own
      * screensaver still caps it: Aerial starts just ahead of that one, see MainActivity.
      * [NEVER] starts none, and switches off the system's while that is Aerial's (issue #333).
+     * Seconds rather than minutes: 30 s and 1 min are the shortest the sheet offers (the owner).
      */
-    var screensaverMinutes by mutableStateOf(DEFAULT_SCREENSAVER_MINUTES); private set
+    var screensaverSeconds by mutableIntStateOf(DEFAULT_SCREENSAVER_SECONDS); private set
 
     const val NEVER = 0
 
-    val screensaverChoices = listOf(2, 5, 10, 20, NEVER)
+    /** 30 s, 1, 2, 5 and 10 min, then never. 20 min was dropped (the owner). */
+    val screensaverChoices = listOf(30, 60, 120, 300, 600, NEVER)
 
     /** Which of Apple's files the aerial screensaver plays; Auto is the best this TV decodes (issues #198, #217). */
     var aerialQuality by mutableStateOf(AerialQuality.Auto); private set
@@ -227,17 +333,15 @@ object AerialSettings {
 
     /** Draw the lighter interface (see [Effects]). */
     val lite: Boolean get() = effects == Effects.Lite || (effects == Effects.Auto && lowEnd)
-    private const val DEFAULT_SCREENSAVER_MINUTES = 5
-
-    val HOME_COLUMNS = 4..6
-    private const val DEFAULT_HOME_COLUMNS = 5
+    private const val DEFAULT_SCREENSAVER_SECONDS = 300
 
     fun init(context: Context) {
         if (started) return
         started = true
         app = context.applicationContext
         val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        chosenFocusStyle = FocusStyle.of(prefs.getString("focus_style", null))
+        iconStyle = IconStyle.of(prefs.getString("icon_style", null))
+        iconLook = IconLook.of(prefs.getString("icon_look", null))
         pinnedSources = prefs.getStringSet("pinned_sources", null)?.toSet() ?: emptySet()
         hiddenSources = prefs.getStringSet("hidden_sources", null)?.toSet() ?: emptySet()
         cecSwitch = prefs.getBoolean("cec_switch", false)
@@ -246,27 +350,53 @@ object AerialSettings {
         pinHash = prefs.getString("pin_hash", null)
         pinSet = pinHash != null
         pinArrows = prefs.getBoolean("pin_arrows", false)
-        oneRowHome = prefs.getBoolean("one_row_home", true)
-        peekNextRow = prefs.getBoolean("peek_next_row", true)
-        chosenColumns = prefs.getInt("home_columns", DEFAULT_HOME_COLUMNS).takeIf { it in HOME_COLUMNS } ?: DEFAULT_HOME_COLUMNS
-        clockRight = prefs.getBoolean("clock_right", false)
+        // The layout is fixed now (one row, the second peeking, six across, on glass): the keys
+        // written by older versions are left behind rather than read.
+        // Before this the clock was either top left or top right; a Home that had chosen the
+        // right keeps it, every other one moves to the middle (the owner: 默认居中).
+        clockPlace = ClockPlace.of(
+            prefs.getString("clock_place", null)
+                ?: if (prefs.getBoolean("clock_right", false)) ClockPlace.Right.key else null,
+        )
         largeClock = prefs.getBoolean("large_clock", false)
+        clockXL = prefs.getBoolean("clock_xl", false)
+        clockFull = prefs.getBoolean("clock_full", false)
+        clockLunar = prefs.getBoolean("clock_lunar", false)
+        clockTerm = prefs.getBoolean("clock_term", false)
         clockHours = ClockHours.of(prefs.getString("clock_hours", null))
         homeLocked = prefs.getBoolean("home_locked", false)
         photoMinutes = prefs.getInt("photo_minutes", DAY_MINUTES).takeIf { it in PHOTO_MINUTES } ?: DAY_MINUTES
-        homePlate = prefs.getBoolean("home_plate", true)
         chosenAllNames = prefs.getBoolean("show_all_names", false)
         wallpaperAlwaysMoves = prefs.getBoolean("wallpaper_always_moves", false)
         showWeather = prefs.getBoolean("show_weather", true)
         screensaverClock = prefs.getBoolean("screensaver_clock", true)
+        puzzleSaver = prefs.getBoolean("puzzle_saver", false)
+        // The puzzle was one of the screensaver kinds until it became a switch of its own. A Home
+        // that had it chosen keeps the puzzle, now as the switch, and its kind goes back to
+        // following the wallpaper — so turning the switch off gives the normal screensaver.
+        // Here rather than in Wallpapers.init, which runs before this and has no app to write with.
+        val wallpaperPrefs = app.getSharedPreferences(Wallpapers.PREFS, Context.MODE_PRIVATE)
+        if (wallpaperPrefs.getString("screensaver", null) == ScreensaverMode.Puzzle.key) {
+            puzzleSaver = true
+            prefs.edit { putBoolean("puzzle_saver", true) }
+            wallpaperPrefs.edit { putString("screensaver", Wallpapers.FOLLOW) }
+        }
         // Before 1.28 this was on or off; on meant whichever sounds Aerial played.
         uiSounds = UiSounds.of(prefs.getString("ui_sounds_kind", null)) ?: when {
             !prefs.getBoolean("ui_sounds", true) -> UiSounds.Off
             Settings.System.getInt(app.contentResolver, Settings.System.SOUND_EFFECTS_ENABLED, 1) == 1 -> UiSounds.Tv
             else -> UiSounds.Aerial
         }
-        backStartsScreensaver = prefs.getBoolean("back_starts_screensaver", true)
-        screensaverMinutes = prefs.getInt("screensaver_minutes", DEFAULT_SCREENSAVER_MINUTES)
+        // A switch before this one: on meant the screensaver, off that Back did nothing.
+        backAction = BackAction.of(
+            prefs.getString("back_action", null)
+                ?: if (prefs.getBoolean("back_starts_screensaver", true)) BackAction.Screensaver.key else BackAction.Off.key,
+        )
+        // Seconds since 1.100; the key before it held minutes.
+        screensaverSeconds = prefs.getInt(
+            "screensaver_seconds",
+            prefs.getInt("screensaver_minutes", DEFAULT_SCREENSAVER_SECONDS / 60) * 60,
+        )
         aerialQuality = AerialQuality.of(prefs.getString("aerial_quality", null))
         effects = Effects.of(prefs.getString("effects", null))
         lowEnd = DeviceClass.lowEnd(app)
@@ -314,40 +444,47 @@ object AerialSettings {
     private fun hash(pin: String): String =
         MessageDigest.getInstance("SHA-256").digest("aerial:$pin".toByteArray()).joinToString("") { "%02x".format(it) }
 
-    fun chooseOneRowHome(on: Boolean) {
-        oneRowHome = on
-        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putBoolean("one_row_home", on) }
-    }
-
-    fun chooseHomeColumns(columns: Int) {
-        if (columns !in HOME_COLUMNS) return
-        chosenColumns = columns
-        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putInt("home_columns", columns) }
-    }
-
-    fun choosePeekNextRow(on: Boolean) {
-        peekNextRow = on
-        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putBoolean("peek_next_row", on) }
-    }
-
     fun chooseUiSounds(kind: UiSounds) {
         uiSounds = kind
         app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putString("ui_sounds_kind", kind.key) }
     }
 
-    fun chooseHomePlate(on: Boolean) {
-        homePlate = on
-        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putBoolean("home_plate", on) }
-    }
-
-    fun chooseClockRight(on: Boolean) {
-        clockRight = on
-        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putBoolean("clock_right", on) }
+    fun chooseClockPlace(place: ClockPlace) {
+        clockPlace = place
+        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putString("clock_place", place.key) }
     }
 
     fun chooseLargeClock(on: Boolean) {
         largeClock = on
         app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putBoolean("large_clock", on) }
+    }
+
+    /**
+     * The clock's size, as one choice over the two booleans it is kept as ([largeClock] keeps its
+     * old key, and [clockXL] rides on it), so the phone page's plain on/off still works.
+     */
+    fun chooseClockSize(size: ClockSize) {
+        val large = size != ClockSize.Small
+        val xl = size == ClockSize.XL
+        val full = size == ClockSize.Full
+        largeClock = large
+        clockXL = xl
+        clockFull = full
+        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit {
+            putBoolean("large_clock", large)
+            putBoolean("clock_xl", xl)
+            putBoolean("clock_full", full)
+        }
+    }
+
+    fun chooseClockLunar(on: Boolean) {
+        clockLunar = on
+        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putBoolean("clock_lunar", on) }
+    }
+
+    fun chooseClockTerm(on: Boolean) {
+        clockTerm = on
+        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putBoolean("clock_term", on) }
     }
 
     fun choosePhotoMinutes(minutes: Int) {
@@ -379,6 +516,9 @@ object AerialSettings {
     fun chooseShowWeather(on: Boolean) {
         showWeather = on
         app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putBoolean("show_weather", on) }
+        // On: fetch at once if the reading has gone stale — waiting for the next return to Home
+        // left the clock without weather after the toggle said it was on (the owner).
+        if (on) Weather.refreshIfStale()
     }
 
     fun chooseScreensaverClock(on: Boolean) {
@@ -386,9 +526,14 @@ object AerialSettings {
         app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putBoolean("screensaver_clock", on) }
     }
 
-    fun chooseBackStartsScreensaver(on: Boolean) {
-        backStartsScreensaver = on
-        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putBoolean("back_starts_screensaver", on) }
+    fun choosePuzzleSaver(on: Boolean) {
+        puzzleSaver = on
+        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putBoolean("puzzle_saver", on) }
+    }
+
+    fun chooseBackAction(action: BackAction) {
+        backAction = action
+        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putString("back_action", action.key) }
     }
 
     fun chooseAerialQuality(quality: AerialQuality) {
@@ -396,10 +541,10 @@ object AerialSettings {
         app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putString("aerial_quality", quality.key) }
     }
 
-    fun chooseScreensaverMinutes(minutes: Int) {
-        screensaverMinutes = minutes
-        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putInt("screensaver_minutes", minutes) }
-        GuardSetup.setSystemScreensaverOff(app, minutes == NEVER)
+    fun chooseScreensaverSeconds(seconds: Int) {
+        screensaverSeconds = seconds
+        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putInt("screensaver_seconds", seconds) }
+        GuardSetup.setSystemScreensaverOff(app, seconds == NEVER)
     }
 
     fun chooseCecSwitch(on: Boolean) {
@@ -423,9 +568,14 @@ object AerialSettings {
         app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putString("effects", choice.key) }
     }
 
-    fun chooseFocusStyle(style: FocusStyle) {
-        chosenFocusStyle = style
-        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putString("focus_style", style.key) }
+    fun chooseIconStyle(style: IconStyle) {
+        iconStyle = style
+        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putString("icon_style", style.key) }
+    }
+
+    fun chooseIconLook(look: IconLook) {
+        iconLook = look
+        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putString("icon_look", look.key) }
     }
 
 }

@@ -16,6 +16,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
 import java.net.URL
 import java.net.URLEncoder
 import java.util.Locale
@@ -278,10 +279,18 @@ object Weather {
     /**
      * Android before 7.1 does not trust the Let's Encrypt root these hosts use; they answer the
      * same over plain HTTP (allowed for them in network_security_config.xml).
+     *
+     * A handshake against an untrusted root does not always raise SSLException: on the MiTV4
+     * (Android 6) it stalls until the socket times out and raises SocketTimeoutException instead.
+     * Catch that too, or the HTTP fallback never runs and the clock sits without weather forever
+     * (2026-11-18, after a reinstall cleared the cached reading). [read] must stay a single attempt:
+     * the retry here swaps https for http, and if that also fails the caller handles it.
      */
     private fun get(url: String): String = try {
         read(url)
     } catch (e: SSLException) {
+        read(url.replaceFirst("https://", "http://"))
+    } catch (e: SocketTimeoutException) {
         read(url.replaceFirst("https://", "http://"))
     }
 

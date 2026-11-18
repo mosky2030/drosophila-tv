@@ -1,30 +1,22 @@
 <div align="center">
 
-<img src="docs/brand/icon.png" width="96" alt="Aerial 图标">
+<img src="app/src/main/res/mipmap-xxxhdpi/ic_launcher.png" width="96" alt="果蝇图标">
 
-# Aerial
+# 果蝇 Drosophila
 
 **给国产电视的一块干净桌面。**
 
 参照 Apple TV 做的 Android TV 桌面：没有广告，没有推荐流，只有你的 App、壁纸和航拍屏保。<br>
 适合小米、TCL、创维、索尼等国产电视，也能装在盒子和投影仪上。开机自动进入，待机也不会被清理。
 
-**中文** · [English](README.en.md)
+**中文** · [English](README.en.md) · 版本 1.24 · [MIT 许可证](LICENSE) · Android TV 5.0+
 
-<a href="https://aerial.qust.me"><img alt="官网" src="https://img.shields.io/badge/%E5%AE%98%E7%BD%91-1f6feb?style=for-the-badge&logo=safari&logoColor=white"></a>
-<a href="https://github.com/pengchujin/aerial-tv/releases/latest"><img alt="下载 APK" src="https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD%20APK-34a853?style=for-the-badge&logo=android&logoColor=white"></a>
-<a href="#安装"><img alt="安装" src="https://img.shields.io/badge/%E5%AE%89%E8%A3%85-d97757?style=for-the-badge&logo=gnubash&logoColor=white"></a>
+![果蝇首页](site/img/home.jpg)
 
-<a href="https://github.com/pengchujin/aerial-tv/releases/latest"><img alt="版本" src="https://img.shields.io/github/v/release/pengchujin/aerial-tv?style=flat-square&label=%E7%89%88%E6%9C%AC&color=2997ff"></a>
-<a href="LICENSE"><img alt="许可证 MIT" src="https://img.shields.io/badge/%E8%AE%B8%E5%8F%AF%E8%AF%81-MIT-555555?style=flat-square"></a>
-<img alt="Android TV 5.0+" src="https://img.shields.io/badge/Android%20TV-5.0%2B-3ddc84?style=flat-square&logo=android&logoColor=white">
-<a href="#lite"><img alt="Lite 4.0–4.4 测试版" src="https://img.shields.io/badge/Lite-4.0%E2%80%934.4%20%E6%B5%8B%E8%AF%95%E7%89%88-f5a623?style=flat-square&logo=android&logoColor=white"></a>
-
-![Aerial 首页](site/img/home.jpg)
-
-| 电视自带的桌面 | 换上 Aerial 之后 |
-|:---:|:---:|
-| <img src="site/img/stock-xiaomi.jpg" alt="电视自带的桌面：满屏剧集推荐、会员和限免角标"> | <img src="site/img/home.jpg" alt="Aerial 首页"> |
+> **这是个人改造分支，不是 Aerial 官方版本。** 基于 Aerial 1.95（基线 `a0f4b59`）改造，包名仍为
+> `app.orchard.tv`，但已移除上游更新通道，不会自动拉回 Aerial 的界面或提示。当前仅在
+> **小米 MiTV4（Android 6）** 真机和 Android 模拟器上实测；分享出来是想收集更多机型反馈，
+> 请先按 **Alpha** 看待。见 [TESTING.md](TESTING.md) 与 [UPSTREAM.md](UPSTREAM.md)。
 
 </div>
 
@@ -88,12 +80,14 @@ adb connect 192.168.1.20:39201   # 无线调试主页面上的另一组 IP:端�
 **让 Agent 装（推荐）**：把下面这段发给能在电脑上运行命令的 Agent（WorkBuddy、豆包电脑版、千问电脑版、Trae、Claude Code、Codex 等）：
 
 ```text
-请帮我把开源电视桌面 Aerial 装到我的电视上，并设为开机进入的桌面。
+请帮我把开源电视桌面果蝇（Drosophila）装到我的电视上，并设为开机进入的桌面。
 电视 IP：<电视IP>
 保持 ADB 常开：要
 
-安装说明在这里：https://aerial.qust.me/agent.md
-（打不开时用 https://raw.githubusercontent.com/pengchujin/aerial-tv/main/site/agent.md ）
+安装说明沿用上游 Aerial 的文档（分品牌 ADB 入口部分仍然适用）：
+https://github.com/pengchujin/aerial-tv/blob/main/site/agent.md
+
+果蝇的 APK 从本仓库的 Releases 下载，不要用上游站点的安装包。
 
 请先完整读完安装说明再动手，然后在我的电脑上亲自运行命令，不要只把步骤告诉我。需要我在电视上操作时提醒我。
 最后按说明里的「验收」，把这几条命令的原始输出原样贴给我：
@@ -114,7 +108,7 @@ curl -fsSL https://aerial.qust.me/install.sh | KEEP_ADB=1 TV=192.168.1.20 bash
 
 只有无线调试的电视（见第 1 步）先 `export ADB_PAIR=<配对屏 IP:端口> ADB_CODE=<6 位配对码> ADB_CONNECT=<无线调试主页 IP:端口>`，再跑上面的命令；没有配对码入口的（TCL Q10M、Q10L、鹤 6 Ultra 等）先按[分品牌说明](docs/devices/adb-by-brand.md)用数据线连一次、运行 `adb tcpip 5555`，之后照常跑上面的命令。
 
-**手动**：下载 [aerial-standard.apk](https://aerial.qust.me/download/aerial-standard.apk)。只有无线调试的电视（见第 1 步）按下面两种情况之一先处理好，再运行命令：
+**手动**：从本仓库 Releases 下载 `app-standard-release.apk`。只有无线调试的电视（见第 1 步）按下面两种情况之一先处理好，再运行命令：
 
 - **有配对码入口**（索尼 BRAVIA 的 Android 14 等）：按第 1 步配对，连上后运行一次 `adb tcpip 5555`，命令的第一行才用 5555；不运行的话，第一行换成无线调试主页面的 IP:端口，其余不变。
 - **没有配对码入口**（TCL Q10M、Q10L、鹤 6 Ultra 等）：按[分品牌说明](docs/devices/adb-by-brand.md)用数据线把电视连到电脑，授权后运行一次 `adb tcpip 5555`；没走这一步时，命令第一行的 `adb connect <电视IP>:5555` 不适用。
@@ -129,7 +123,7 @@ adb shell am start -n app.orchard.tv/.MainActivity
 adb shell cmd package compile -m speed -f app.orchard.tv
 ```
 
-最后一条让 Aerial 在电视上更流畅：等 Aerial 显示出来、过 5 秒再运行，要几十秒。不运行的话，Aerial 要等到下次从控制中心升级时才会编译。
+最后一条让桌面在电视上更流畅：等果蝇显示出来、过 5 秒再运行，要几十秒。
 
 Windows 用 Agent 装，或照[安装说明](site/agent.md)里的 Windows 步骤。
 
@@ -137,13 +131,14 @@ Windows 用 Agent 装，或照[安装说明](site/agent.md)里的 Windows 步骤
 
 | 下载 | 用在 |
 |---|---|
-| [aerial-standard.apk](https://aerial.qust.me/download/aerial-standard.apk) | Android 5.0 及以上，先装这个 |
-| [aerial-guard.apk](https://aerial.qust.me/download/aerial-guard.apk) | standard 装不上、提示不允许安装桌面类 App 时 |
-| [aerial-lite.apk](https://aerial.qust.me/download/aerial-lite.apk) | Android 4.0–4.4（见下面的 [Aerial Lite](#lite)） |
+| 本仓库 Releases 的 `app-standard-release.apk` | Android 5.0 及以上 |
+| 上游 Aerial 的 releases | 仅作参考，不用于本分支 |
 
 装好后按主页键：系统问「使用哪个应用」时选 Aerial、再选「始终」就设好了（原生 Android TV 一般是这样）。直接回到原桌面、不问（国产电视大多这样）时，从「我的应用」打开 Aerial，它会弹出「设为主屏幕」，按里面的入口去电视设置里打开桌面守护（无障碍）和通知使用权；电视设置里没有这些入口时，Aerial 只能当普通 App 用，要接管主页键还得用上面的命令或 Agent 设置一次（覆盖安装，不丢设置）。
 
-**升级**：1.32 起，有新版本时控制中心会出现「有新版本」，点进去选「下载并安装」，在电视自己的安装界面确认（小米、TCL 上验证过），装完回到 Aerial，设置都保留。电视不让 App 安装应用时，升级就是再运行一次安装命令：升级页上有二维码，手机扫码能直接复制这台电视的命令，或者交给 Agent。1.31 及以前没有这个按钮，这一次还是要再运行一次安装命令。
+**升级**：本分支已剥离 Aerial 的更新通道，控制中心不会再出现「有新版本」。升级就是到本仓库
+Releases 下载新 APK 覆盖安装；只要签名密钥不变，设置都会保留。从早期 debug 签名的 1.24
+（versionCode 135）升级到正式签名的版本时，Android 会拒绝覆盖，需要先卸载再装（设置会丢失一次）。
 
 <a id="lite"></a>
 

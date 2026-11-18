@@ -1,15 +1,20 @@
 <div align="center">
 
-<img src="docs/brand/icon.png" width="96" alt="Aerial icon">
+<img src="app/src/main/res/mipmap-xxxhdpi/ic_launcher.png" width="96" alt="Drosophila icon">
 
-# Aerial
+# Drosophila
 
 **A calm home screen for Android TV.**
 
 A home screen modeled on Apple TV, with no ads and no recommendation feeds: just your apps, your wallpaper and aerial screensavers.<br>
 Made for Xiaomi, TCL, Skyworth, Sony and other TVs sold in China, and runs on boxes and projectors too. It starts at boot and survives standby.
 
-[中文](README.md) · **English**
+[中文](README.md) · **English** · version 1.24 · [MIT](LICENSE) · Android TV 5.0+
+
+> **This is a personal fork, not the official Aerial build.** It starts from Aerial 1.95
+> (base commit `a0f4b59`), keeps the `app.orchard.tv` package, and has the upstream update
+> channel removed on purpose. Verified on a Xiaomi MiTV4 (Android 6) and an emulator only —
+> treat it as Alpha. See [TESTING.md](TESTING.md) and [UPSTREAM.md](UPSTREAM.md).
 
 <a href="https://aerial.qust.me/en/"><img alt="Website" src="https://img.shields.io/badge/Website-1f6feb?style=for-the-badge&logo=safari&logoColor=white"></a>
 <a href="https://github.com/pengchujin/aerial-tv/releases/latest"><img alt="Download APK" src="https://img.shields.io/badge/Download%20APK-34a853?style=for-the-badge&logo=android&logoColor=white"></a>

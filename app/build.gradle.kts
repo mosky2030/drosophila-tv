@@ -19,7 +19,9 @@ android {
         // Android 5.0. Compose 1.10 and later need 6.0, so the Compose BOM below stays on 1.9.
         minSdk = 21
         targetSdk = 34
-        versionCode = 135
+        // 136: the first build signed with Drosophila's own release key (local/ is gitignored).
+        // The earlier 135 debug-signed copies cannot be updated in place — uninstall first.
+        versionCode = 136
         // Drosophila's own numbering, starting at 1.22: Aerial's 1.95 belonged to a release line this
         // fork no longer follows, and with no update channel there is nothing left to be newer than.
         versionName = "1.24"

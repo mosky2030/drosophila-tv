@@ -9,15 +9,19 @@
 
 ## 远端设置
 
-当前本地仓库的 `origin` 还指着上游。准备独立发布时改成分工明确的两个远端：
+远端已经设好：`origin` = `https://github.com/mosky2030/drosophila-tv.git`（果蝇），
+`upstream` = `https://github.com/pengchujin/aerial-tv.git`（Aerial）。
+
+第一次推送失败的原因此仓库原先是 shallow clone（`.git/shallow` 指向 `a0f4b59`），
+`git fetch --unshallow upstream` 补全历史后推送成功。以后不必再做这一步。
+
+以后也可以照下面这条命令重新分工：
 
 ```bash
 git remote rename origin upstream
 git remote add origin https://github.com/<你的账号>/<你的新仓库>.git
 git push -u origin main
 ```
-
-以后 `origin` = 自己的果蝇仓库，`upstream` = Aerial 上游。
 
 ## 挑上游修复的流程
 

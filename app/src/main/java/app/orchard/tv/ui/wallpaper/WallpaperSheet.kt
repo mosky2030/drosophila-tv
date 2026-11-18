@@ -4,7 +4,9 @@ import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -63,6 +65,10 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.NativeKeyEvent
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.ui.platform.LocalContext
@@ -72,6 +78,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import app.orchard.tv.R
 import app.orchard.tv.settings.AerialSettings
 import app.orchard.tv.settings.BackAction
@@ -128,7 +135,6 @@ fun WallpaperSheet(
     hiddenCount: Int,
     onHiddenApps: () -> Unit,
     onHomeLock: (on: Boolean) -> Unit,
-    onStartScreensaver: () -> Unit,
     onPin: (on: Boolean) -> Unit,
     /** Kids and Elders mode's setup (behind the PIN). */
     onKids: () -> Unit,
@@ -287,11 +293,14 @@ fun WallpaperSheet(
                     )
                     Choices(
                         R.string.st_clock_size, stringResource(R.string.st_clock_size_hint), note,
+                        // Three sizes now, not four (the owner, 2026-11-18: 「大去掉不要，超大
+                        // 改成大，满屏改成超大」): the old shelf clock a size up is gone from the
+                        // choices, so the extra-large clock answers to 大 and the full-width one
+                        // answers to 超大. The ClockSize values stay the program's own names.
                         listOf(
                             ClockSize.Small to R.string.st_clock_small,
-                            ClockSize.Large to R.string.st_clock_large,
-                            ClockSize.XL to R.string.st_clock_xl,
-                            ClockSize.Full to R.string.st_clock_full,
+                            ClockSize.XL to R.string.st_clock_large,
+                            ClockSize.Full to R.string.st_clock_xl,
                         ),
                         AerialSettings.clockSize, AerialSettings::chooseClockSize,
                     )
@@ -319,36 +328,22 @@ fun WallpaperSheet(
                         AerialSettings.clockTerm, AerialSettings::chooseClockTerm,
                     )
                 }
-                // The city the clock's weather reads, in the same section as the clock it sits
-                // beside: it used to be a section of its own, one row under a title called
-                // Weather, while the switch that shows it lived with the clock.
-                Group(stringResource(if (Weather.chosen) R.string.wp_weather_chosen else R.string.wp_weather_guessed)) { note ->
-                    SettingRow(R.string.wp_weather_city, null, note, first = true) { WeatherValue() }
-                }
-
                 Spacer(Modifier.height(16.dp))
                 SectionTitle(R.string.wp_screensaver)
                 Group { note ->
                     SettingRow(
                         R.string.ss_kind,
                         when {
-                            // The switch takes the screensaver over; the kind below it waits.
-                            AerialSettings.puzzleSaver -> stringResource(R.string.ss_puzzle_over_hint)
                             Wallpapers.screensaver == ScreensaverMode.Videos -> stringResource(R.string.ss_videos_hint)
-                            Wallpapers.screensaver == ScreensaverMode.System -> stringResource(R.string.ss_system_hint)
                             Wallpapers.screensaverFollows -> stringResource(R.string.ss_follow_hint)
                             AerialSettings.backAction == BackAction.Screensaver -> stringResource(R.string.ss_back_hint)
                             else -> null
                         },
                         note, first = true,
-                    ) { ScreensaverChoice(onStartScreensaver) }
-                    // The puzzle is a switch rather than one of the kinds: on, it plays whatever
-                    // wallpaper Home shows; off, the kind chosen above comes back.
-                    Choices(
-                        R.string.ss_puzzle_saver, stringResource(R.string.ss_puzzle_hint), note,
-                        listOf(true to R.string.st_on, false to R.string.st_off),
-                        AerialSettings.puzzleSaver, AerialSettings::choosePuzzleSaver,
-                    )
+                    ) { ScreensaverChoice() }
+                    // The puzzle switch is gone (the owner, 2026-11-18): with 航拍 or 时钟 chosen it
+                    // took the screensaver over and the two fought each other. The puzzle is now
+                    // only something you open from its own app, one daily picture at a time.
                     // The clock screensaver is its clock, and the others show none.
                     if (Wallpapers.screensaver == ScreensaverMode.Aerial || Wallpapers.screensaver == ScreensaverMode.Photos) Choices(
                         R.string.ss_show_time, stringResource(R.string.ss_show_time_hint), note,
@@ -442,6 +437,12 @@ fun WallpaperSheet(
                         AerialSettings.backAction, AerialSettings::chooseBackAction,
                     )
                 }
+                // The weather's city, now under the keys as the owner asked (2026-11-18: 「位置
+                // 选项放在按键选项下面」). It used to sit with the clock, then had its own
+                // section under a title called Weather while the switch lived with the clock.
+                Group(stringResource(if (Weather.chosen) R.string.wp_weather_chosen else R.string.wp_weather_guessed)) { note ->
+                    SettingRow(R.string.wp_weather_city, null, note, first = true) { WeatherValue() }
+                }
 
                 Spacer(Modifier.height(16.dp))
                 SectionTitle(R.string.sec_lock)
@@ -451,20 +452,20 @@ fun WallpaperSheet(
                     }
                     SettingRow(R.string.st_kids, stringResource(R.string.st_kids_hint), note) {
                         // The last row that takes focus: bring the note under it into view too.
-                        Box(Modifier.onFocusChanged { if (it.hasFocus) scope.launch { scroll.animateScrollTo(scroll.maxValue) } }) {
-                            ActionChip(
-                                when {
-                                    !Restricted.enabled -> stringResource(R.string.st_off)
-                                    Restricted.kind == RestrictedKind.Kids -> stringResource(R.string.kids_kind_kids)
-                                    else -> stringResource(R.string.kids_kind_elders)
-                                },
-                                Glyph.ChevronRight,
-                                onKids,
-                            )
-                        }
+                        // Its chip sits only a hair above the sheet's bottom now (the owner asked
+                        // to move it down), and bumps when Down has nowhere left to go.
+                        BottomActionChip(
+                            when {
+                                !Restricted.enabled -> stringResource(R.string.st_off)
+                                Restricted.kind == RestrictedKind.Kids -> stringResource(R.string.kids_kind_kids)
+                                else -> stringResource(R.string.kids_kind_elders)
+                            },
+                            onFocused = { scope.launch { scroll.animateScrollTo(scroll.maxValue) } },
+                            onClick = onKids,
+                        )
                     }
                 }
-                Spacer(Modifier.height(24.dp))
+                Spacer(Modifier.height(6.dp))
             }
             Spacer(Modifier.width(28.dp))
             PhoneCard(phoneUrl, qr)
@@ -788,7 +789,7 @@ private fun WeatherValue() {
 
 /** A pill to pick one of a few options: a check on the chosen one, white when focused. */
 @Composable
-private fun Chip(label: String, on: Boolean, onFocused: (() -> Unit)? = null, onClick: () -> Unit) {
+private fun Chip(label: String, on: Boolean, onFocused: (() -> Unit)? = null, compact: Boolean = false, onClick: () -> Unit) {
     Pressable(onClick = onClick, focusedScale = 1.06f) { state ->
         if (onFocused != null) LaunchedEffect(state.focused) { if (state.focused) onFocused() }
         val bg by animateColorAsState(
@@ -805,14 +806,48 @@ private fun Chip(label: String, on: Boolean, onFocused: (() -> Unit)? = null, on
             // (6dp and more on a wide pill), and at the ends of a scrollable row of these the
             // bounds sit on the clip — the zoom used to be shaved off both sides of the pill.
             // The padding is outside the drawn pill, so the pill itself is as it was.
-            Modifier.padding(horizontal = 8.dp)
-                .clip(RoundedCornerShape(50)).drawBehind { drawRect(bg) }.height(30.dp).padding(horizontal = 14.dp),
+            Modifier.padding(horizontal = if (compact) 3.dp else 8.dp)
+                .clip(RoundedCornerShape(50)).drawBehind { drawRect(bg) }
+                .height(if (compact) 28.dp else 30.dp)
+                .padding(horizontal = if (compact) 8.dp else 14.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(if (compact) 3.dp else 6.dp),
         ) {
-            if (on) GlyphIcon(Glyph.Check, fg, 14.dp)
-            BasicText(label, style = Type.Body.copy(color = fg))
+            if (on) GlyphIcon(Glyph.Check, fg, if (compact) 11.dp else 14.dp)
+            BasicText(label, style = Type.Body.copy(fontSize = if (compact) 12.sp else Type.Body.fontSize, color = fg))
         }
+    }
+}
+
+/**
+ * The last row that can take focus: a Down press has nowhere to go, so the chip bumps against the
+ * bottom edge and answers with the limit sound, as a Home icon does at a wall (the owner,
+ * 2026-11-18: 「家长长辈按钮往下移动加撞墙效果」). The key is consumed, so it cannot wander off
+ * to a control behind the sheet.
+ */
+@Composable
+private fun BottomActionChip(label: String, onFocused: () -> Unit, onClick: () -> Unit) {
+    val bump = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    Box(
+        Modifier
+            .graphicsLayer { translationY = bump.value }
+            .onKeyEvent { e ->
+                if (e.type == KeyEventType.KeyDown &&
+                    e.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_DPAD_DOWN &&
+                    e.nativeKeyEvent.repeatCount == 0
+                ) {
+                    Sounds.limit()
+                    scope.launch {
+                        bump.animateTo(11f, tween(90, easing = Motion.EaseOut))
+                        bump.animateTo(0f, spring(dampingRatio = 0.65f, stiffness = 520f))
+                    }
+                    true
+                } else false
+            }
+            .onFocusChanged { if (it.hasFocus) onFocused() },
+    ) {
+        ActionChip(label, Glyph.ChevronRight, onClick)
     }
 }
 
@@ -836,47 +871,29 @@ private fun ActionChip(label: String, glyph: Glyph, onClick: () -> Unit) {
     }
 }
 
+/**
+ * All the screensaver kinds, out in the open (the owner, 2026-11-18: 「把所有选项都展开，不用
+ * 只显示三个」). The pills are tighter than the settings' usual ones so all five fit without a
+ * sideways scroll, and the "Start now" button is gone (same day): the row only picks a type.
+ */
 @Composable
-private fun androidx.compose.foundation.layout.RowScope.ScreensaverChoice(onStart: () -> Unit) {
-    // The choice first, then the action that tries it. The chips scroll within their own share of
-    // the row, so they never squeeze the label beside them down to a single character (the owner:
-    // 类型 read as 类).
-    // The whole control takes half the row ([weight]), so the label beside it keeps its room;
-    // inside it the chips scroll within their own share, and the start button stays put.
+private fun androidx.compose.foundation.layout.RowScope.ScreensaverChoice() {
     Row(
-        // As Choices: the pills and the start button sit at the row's end.
         Modifier.weight(1f),
         horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            // fill = false: as wide as its chips when they fit, else the room left beside the
-            // start button (the weighted child is measured after the plain ones), and scrolls.
-            Modifier.weight(1f, fill = false).horizontalScroll(rememberScrollState()),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(0.dp),
-        ) {
-            listOf(
-                ScreensaverMode.Aerial to R.string.ss_aerial,
-                ScreensaverMode.Photos to R.string.ss_photos,
-                ScreensaverMode.Clock to R.string.ss_clock,
-                ScreensaverMode.Videos to R.string.ss_videos,
-                ScreensaverMode.System to R.string.ss_system,
-            ).forEach { (mode, label) ->
-                Chip(stringResource(label), on = Wallpapers.screensaver == mode) { Wallpapers.chooseScreensaver(mode) }
-            }
-        }
-        Spacer(Modifier.width(6.dp))
-        Pressable(onClick = onStart, focusedScale = 1.06f) { state ->
-            val bg by animateColorAsState(if (state.focused) Palette.Focus else Palette.FillStrong, tween(140, easing = Motion.EaseOut), label = "ss-start")
-            val fg = if (state.focused) Palette.OnFocus else Palette.Label
-            Row(
-                Modifier.padding(horizontal = 8.dp)
-                    .clip(RoundedCornerShape(50)).drawBehind { drawRect(bg) }.height(30.dp).padding(horizontal = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                GlyphIcon(Glyph.Play, fg, 14.dp)
-                BasicText(stringResource(R.string.ss_start), style = Type.Body.copy(color = fg))
+        // 航拍 is the bundled Aerial films; 视频 is the owner's own MP4/MOV, played as real video
+        // (VideoSaver), not a still album — next to 照片 as the two picture sources. 系统内置 is
+        // gone (the owner, 2026-11-18: 「系统内置似乎不起作用，删除吧」).
+        listOf(
+            ScreensaverMode.Aerial to R.string.ss_aerial,
+            ScreensaverMode.Photos to R.string.ss_photos,
+            ScreensaverMode.Videos to R.string.ss_videos,
+            ScreensaverMode.Clock to R.string.ss_clock,
+        ).forEach { (mode, label) ->
+            Chip(stringResource(label), on = Wallpapers.screensaver == mode, compact = true) {
+                Wallpapers.chooseScreensaver(mode)
             }
         }
     }

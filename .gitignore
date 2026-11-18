@@ -20,3 +20,6 @@ site/icons/
 
 # Icon/design working files: candidate renders, screenshots, generator scripts.
 docs/iconstudy/
+
+# Temporary chunks from Wi-Fi adb transfers to the TV.
+chunks/

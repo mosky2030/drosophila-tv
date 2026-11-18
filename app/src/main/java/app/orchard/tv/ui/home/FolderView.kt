@@ -244,7 +244,10 @@ fun FolderView(
                             fun shifter(key: String) = shifts.getOrPut(key) {
                                 Animatable(IntOffset.Zero, IntOffset.VectorConverter)
                             }
-                            val rowRoom = 44.dp
+                            // Room for the label under each row: 10dp nameGap + 24dp label box +
+                            // the focus zoom's drop. 44dp left the focused name touching the row
+                            // below on the smaller tiles (the owner, 2026-11-18).
+                            val rowRoom = 52.dp
                             shown.chunked(flowColumns).forEachIndexed { r, row ->
                                 // The row keeps room under its tiles for their names, which the scroll
                                 // container would otherwise clip at its own bounds. Tiles start at
@@ -294,8 +297,10 @@ fun FolderView(
                                                 // One plate under every icon: a hairline edge of its own keeps
                                                 // dark artwork from melting into it.
                                                 edge = true,
-                                                // The rows are tighter than Home's grid: the name rides up with it.
-                                                nameGap = 5.dp,
+                                                // Breathing room under a square's name, as on the
+                                                // hidden board (the owner, 2026-11-18); rowRoom
+                                                // above keeps the next row clear of it.
+                                                nameGap = 10.dp,
                                                 onFocused = { focusedKey = app.key },
                                                 // While an app moves, a tap opens nothing (OK ends the move on Home's keys).
                                                 onClick = { bounds -> if (movingKey == null) onLaunch(app, bounds) },

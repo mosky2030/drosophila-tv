@@ -60,13 +60,15 @@ enum class ClockHours(val key: String) {
 
 /**
  * How large Home's clock is: the corner-line small one, the lock-screen one above the top row,
- * that one a size up, or the time alone at nearly the screen's width, over the icons.
+ * that one a size up, or the time alone at nearly the screen's width, over the icons. Large is no
+ * longer offered (2026-11-18) — the panel's 大 is XL and its 超大 is Full; the wire keys follow
+ * the panel's names so the dropped size cannot be reached by broadcast either.
  */
 enum class ClockSize { Small, Large, XL, Full;
 
     companion object {
         fun of(key: String?): ClockSize? = when (key) {
-            "small" -> Small; "large" -> Large; "xl" -> XL; "full" -> Full
+            "small" -> Small; "large" -> XL; "xl" -> Full; "full" -> Full
             else -> null
         }
     }
@@ -277,14 +279,6 @@ object AerialSettings {    private const val PREFS = "settings"
      */
     var screensaverClock by mutableStateOf(true); private set
 
-    /**
-     * The screensaver is the puzzle: Home's picture as a jigsaw, shuffled, played with the remote
-     * (ui/home/Screensaver.kt). A switch of its own rather than one of the kinds, so it takes the
-     * screensaver over whatever kind was chosen, and whatever the wallpaper: Bing's picture of the
-     * day, one of the owner's own photos, or the bundled puzzle set. Off puts the chosen kind back.
-     */
-    var puzzleSaver by mutableStateOf(false); private set
-
     /** Every app's name under its tile, not only the focused one's (issue #28), the top row's on the glass plate too. */
     private var chosenAllNames by mutableStateOf(false)
 
@@ -361,6 +355,13 @@ object AerialSettings {    private const val PREFS = "settings"
         largeClock = prefs.getBoolean("large_clock", false)
         clockXL = prefs.getBoolean("clock_xl", false)
         clockFull = prefs.getBoolean("clock_full", false)
+        // The old middle size was dropped from the choices (the owner, 2026-11-18: 「大去掉
+        // 不要」). A Home saved on it moves up to the extra-large clock rather than keeping a
+        // size the panel can no longer name — and writes it back so it stays moved.
+        if (largeClock && !clockXL && !clockFull) {
+            clockXL = true
+            prefs.edit { putBoolean("clock_xl", true) }
+        }
         clockLunar = prefs.getBoolean("clock_lunar", false)
         clockTerm = prefs.getBoolean("clock_term", false)
         clockHours = ClockHours.of(prefs.getString("clock_hours", null))
@@ -370,17 +371,14 @@ object AerialSettings {    private const val PREFS = "settings"
         wallpaperAlwaysMoves = prefs.getBoolean("wallpaper_always_moves", false)
         showWeather = prefs.getBoolean("show_weather", true)
         screensaverClock = prefs.getBoolean("screensaver_clock", true)
-        puzzleSaver = prefs.getBoolean("puzzle_saver", false)
-        // The puzzle was one of the screensaver kinds until it became a switch of its own. A Home
-        // that had it chosen keeps the puzzle, now as the switch, and its kind goes back to
-        // following the wallpaper — so turning the switch off gives the normal screensaver.
-        // Here rather than in Wallpapers.init, which runs before this and has no app to write with.
+        // The puzzle used to be a switch that overrode the screensaver kind, and before that a
+        // kind of its own. Both are gone (the owner, 2026-11-18): the puzzle lives in its own app,
+        // and a Home saved on either old form goes back to following its wallpaper.
         val wallpaperPrefs = app.getSharedPreferences(Wallpapers.PREFS, Context.MODE_PRIVATE)
         if (wallpaperPrefs.getString("screensaver", null) == ScreensaverMode.Puzzle.key) {
-            puzzleSaver = true
-            prefs.edit { putBoolean("puzzle_saver", true) }
             wallpaperPrefs.edit { putString("screensaver", Wallpapers.FOLLOW) }
         }
+        if (prefs.contains("puzzle_saver")) prefs.edit { remove("puzzle_saver") }
         // Before 1.28 this was on or off; on meant whichever sounds Aerial played.
         uiSounds = UiSounds.of(prefs.getString("ui_sounds_kind", null)) ?: when {
             !prefs.getBoolean("ui_sounds", true) -> UiSounds.Off
@@ -524,11 +522,6 @@ object AerialSettings {    private const val PREFS = "settings"
     fun chooseScreensaverClock(on: Boolean) {
         screensaverClock = on
         app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putBoolean("screensaver_clock", on) }
-    }
-
-    fun choosePuzzleSaver(on: Boolean) {
-        puzzleSaver = on
-        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putBoolean("puzzle_saver", on) }
     }
 
     fun chooseBackAction(action: BackAction) {

@@ -46,7 +46,7 @@ object PuzzleShell {
      * Wires [web] to hand Home's picture to the page. Call before loading [page]: the page asks for
      * it while it is being parsed.
      */
-    fun bind(web: WebView) {
+    fun bind(web: WebView, onReady: () -> Unit = {}) {
         // DevTools over adb (`chrome://inspect`), to ask the page on the set itself what it sees
         // when it will not draw. Remote debugging needs adb; a television has no browser beside it.
         WebView.setWebContentsDebuggingEnabled(true)
@@ -62,6 +62,10 @@ object PuzzleShell {
         web.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView, url: String?) {
                 DiagLog.i("puzzle page finished: $url")
+                // The shell's black cover can come off now: past this point the page's own dark
+                // curtain is drawn, so nothing uninitialised can show at the edges (the owner,
+                // 2026-11-18: the TV flashed colour along the right and bottom on the way in).
+                view.post(onReady)
             }
 
             // The API-1 overload: it is the one an Android 6 WebView calls.

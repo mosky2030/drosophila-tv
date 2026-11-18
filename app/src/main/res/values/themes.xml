@@ -13,4 +13,21 @@
              first frame, which is the wallpaper baked at the last start. -->
         <item name="android:windowDisablePreview">true</item>
     </style>
+
+    <!-- The puzzle shell: black from the very first frame, with no window transition at all.
+         Home's aerial film is a SurfaceView outside its window and cannot fade with it; a fading
+         or delayed window let its colour show along the right and bottom edges on the MiTV4
+         (the owner, 2026-11-18: 「右边和底边会闪一下，现在是彩色的闪」). A black starting
+         window here costs a moment of black, which is exactly what the board fades in from. -->
+    <style name="Theme.Puzzle" parent="Theme.Aerial">
+        <item name="android:windowDisablePreview">false</item>
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:windowIsTranslucent">false</item>
+        <item name="android:windowAnimationStyle">@style/Anim_Puzzle</item>
+    </style>
+
+    <style name="Anim_Puzzle">
+        <item name="android:windowEnterAnimation">@null</item>
+        <item name="android:windowExitAnimation">@null</item>
+    </style>
 </resources>

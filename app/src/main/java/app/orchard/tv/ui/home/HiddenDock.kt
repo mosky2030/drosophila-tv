@@ -95,7 +95,11 @@ internal fun HiddenDockPanel(
         // 用的玻璃底板，有三排就弹出够三排用的」) — and stands flush with the bottom edge, as in
         // the sketch. Past ~0.86 of the screen it stops growing and the rows scroll instead.
         val gap = 22.dp
-        val rowGap = 26.dp
+        // The focused tile's name sits 10dp under its icon and is 24dp tall; the focus zoom drops
+        // it a further few dp. At 26dp the name landed on the next row's icon (the owner,
+        // 2026-11-18: 「焦点图标下方的名称会压住下方图标」), so the row step carries a name's
+        // worth of room now. Folders in the board use the same grid and get the same fix.
+        val rowGap = 48.dp
         val columns = 6
         // The icons are the wheel's squares (the owner: 「图标大小按照轮盘的方形图标大小来」).
         val side = wheelSide(boardW)
@@ -268,6 +272,10 @@ internal fun HiddenDockPanel(
                                         app.key == focusedKey || app.key == movingKey,
                                     nameFollowsIcon = true,
                                     square = true,
+                                    // A little air between the square and its name (the owner,
+                                    // 2026-11-18: 「名称离图标太近了，看着局促」). rowGap still holds
+                                    // the whole label clear of the next row.
+                                    nameGap = 10.dp,
                                     forcedAlpha = if (app.key == focusedKey || app.key == movingKey) 0.80f else 0.70f,
                                     edge = true,
                                     // Inside a folder Up is refused; the focused tile bumps up to

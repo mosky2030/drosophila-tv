@@ -140,7 +140,7 @@
     <string name="st_clock_large">大</string>
     <string name="st_clock_xl">超大</string>
     <string name="st_clock_full">满屏</string>
-    <string name="st_clock_size_hint">小：时间和天气在角上一行小字。大：屏幕上方一个大时钟，上面是日期，下面是天气。超大：同一个时钟再大一圈。满屏：只有时间，宽度铺满屏幕，居中悬在图标上方。</string>
+    <string name="st_clock_size_hint">小：时间和天气在角上一行小字。大：屏幕上方的大时钟，上面日期、下面天气，比原来再大一圈。超大：只有时间，宽度铺满屏幕，居中悬在图标上方。</string>
     <string name="st_clock_hours">时间格式</string>
     <string name="st_clock_hours_system">跟随电视</string>
     <string name="st_clock_hours_24">24 小时</string>
@@ -268,9 +268,6 @@
     <string name="tile_kids">儿童</string>
     <string name="ss_videos">视频</string>
     <string name="ss_puzzle">拼图</string>
-    <string name="ss_puzzle_saver">拼图屏保</string>
-    <string name="ss_puzzle_hint">把桌面壁纸打散成拼图，方向键与确定键都在玩棋盘；每日一图、自己上传的照片都能拼。按返回退出屏保。</string>
-    <string name="ss_puzzle_over_hint">已开启：屏保显示拼图，上面选的类型暂不生效。</string>
     <string name="ss_videos_hint">扫码从手机添加 MP4 或 MOV 视频，离线轮播；没有可播放的视频时显示照片。</string>
     <string name="ss_system">系统内置</string>
     <string name="ss_system_hint">用电视自带的屏保（比如小米的那些画面），果蝇不再显示自己的屏保。</string>

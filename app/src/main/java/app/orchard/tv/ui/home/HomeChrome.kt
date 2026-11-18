@@ -764,18 +764,17 @@ fun FullClock(now: LocalDateTime, topRowY: Dp, modifier: Modifier = Modifier) {
     // alignment of its own would centre it a second time — the two stacked and shoved the time
     // half a margin to the right (the owner's screenshot).
     BoxWithConstraints(modifier, contentAlignment = Alignment.TopStart) {
-        // "21:13" is about 2.115 em at the display cut and "12:46" a hair wider, so the size
-        // comes from the width it has to fill (the owner found 1/2.55 too small: the time sat
-        // with a wide, empty right side and read as shoved left) — then checked against the ink
-        // the digits really make. A set's own font scale can widen them past what the divisor
-        // assumed, and the MiTV4 let the last minute digit run off the screen: "12:4" on it, the
-        // 5 gone (2026-11-16). Whatever the system does to the text, five digits end inside.
+        // "21:13" is about 2.115 em at the display cut and "12:46" a hair wider. The digits are
+        // now set from a slightly smaller divisor and kept inside 92% of the room: the owner
+        // (2026-11-18) still saw an end digit clipped at 97%, and a little air at each edge keeps
+        // the ink — and the fake shade around it — whole whatever the font's bearings do. The
+        // screensaver's own full-screen clock is a separate drawing and keeps its size.
         val timeTextNow = timeText(now)
         val measurer = rememberTextMeasurer()
         val fitted = remember(timeTextNow, maxWidth, density) {
-            var s = maxWidth.value / 2.4f
+            var s = maxWidth.value / 2.6f
             var layout = measurer.measure(timeTextNow, Type.Clock.copy(fontSize = s.sp))
-            val room = with(density) { maxWidth.toPx() } * 0.97f
+            val room = with(density) { maxWidth.toPx() } * 0.92f
             fun ink(l: TextLayoutResult) =
                 l.getBoundingBox(l.layoutInput.text.length - 1).right - l.getBoundingBox(0).left
             val w = ink(layout)
@@ -803,7 +802,7 @@ fun FullClock(now: LocalDateTime, topRowY: Dp, modifier: Modifier = Modifier) {
         // minute turned and a narrow digit stopped the shoving (the owner, 2026-11-18:
         // 「7:38 没有显示全」 then 「又可以了」). A negative offset only parks the box's empty
         // leading space off-screen; the ink itself stays centred and inside, and the fit above
-        // has already capped the ink at 97% of the room.
+        // has already capped the ink at 92% of the room.
         val bbLeft = timeLayout.getBoundingBox(0).left
         val bbRight = timeLayout.getBoundingBox(timeTextNow.length - 1).right
         val inkWidth = with(density) { (bbRight - bbLeft).toDp() }
@@ -867,20 +866,19 @@ fun FullClock(now: LocalDateTime, topRowY: Dp, modifier: Modifier = Modifier) {
 private val FullClockGap = 40.dp
 
 /**
- * One soft shade under the full-screen digits, so they read on a bright sky at half strength —
- * none at all below Android 7.
+ * One soft shade under the full-screen digits, so they read on a bright sky at half strength.
  *
  * A shadow this wide under text this big is not free on the old renderers: Xiaomi's hwui on
- * Android 6 (the owner's MiTV4, 2026-11-16) draws it through RenderScript, and the blur crashed
- * the render thread outright — `SIGSEGV` in `ScriptIntrinsicBlur::setInput`, in the frame the
- * full-screen clock first appeared. The setting is kept, so the app died again on every start
- * until it was uninstalled: a clock that needs no shade beats a desktop that cannot be reached.
- * The small clock's 18px shade is old enough to be safe there (it drew for an hour before this),
- * the digits here are a screen wide and read on their own.
+ * Android 6 (the owner's MiTV4, 2026-11-16) draws a 26px blur through RenderScript, and that
+ * crashed the render thread outright — `SIGSEGV` in `ScriptIntrinsicBlur::setInput`. A small
+ * blur is safe there: the corner clock's 18px shade drew for an hour without trouble. So the
+ * old renderer gets a tight 6px shade instead of none — it keeps the digits legible on a bright
+ * picture without the ghosting ten stacked copies left on the TV (the owner, 2026-11-18:
+ * 「桌面的时钟会有阴影和黑线」).
  */
-private val FullShadow: Shadow? =
+private val FullShadow: Shadow =
     if (Build.VERSION.SDK_INT >= 24) Shadow(Color.Black.copy(alpha = 0.30f), Offset(0f, 3f), blurRadius = 26f)
-    else null
+    else Shadow(Color.Black.copy(alpha = 0.45f), Offset(0f, 2f), blurRadius = 6f)
 
 /**
  * How far the clock has wandered with the screensaver ([saverDrift]), held once it ends: the time

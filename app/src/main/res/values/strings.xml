@@ -140,7 +140,7 @@
     <string name="st_clock_large">Large</string>
     <string name="st_clock_xl">Extra Large</string>
     <string name="st_clock_full">Full Screen</string>
-    <string name="st_clock_size_hint">Small puts the time and weather in one line in the corner. Large puts a big clock at the top of the screen, the date over it and the weather under it. Extra large is the same clock a size up. Full screen is the time alone, as wide as the screen, centred over the icons.</string>
+    <string name="st_clock_size_hint">Small puts the time and weather in one line in the corner. Large puts a big clock at the top of the screen, the date over it and the weather under it, a size up from the old one. Extra large is the time alone, as wide as the screen, centred over the icons.</string>
     <string name="st_clock_hours">Time</string>
     <string name="st_clock_hours_system">As the TV</string>
     <string name="st_clock_hours_24">24-Hour</string>
@@ -268,9 +268,6 @@
     <string name="tile_kids">Kids</string>
     <string name="ss_videos">Videos</string>
     <string name="ss_puzzle">Puzzle</string>
-    <string name="ss_puzzle_saver">Puzzle Screensaver</string>
-    <string name="ss_puzzle_hint">Home\'s picture as a jigsaw, shuffled, played with the remote: whatever the wallpaper, Bing\'s picture of the day or one of your own. Back ends it.</string>
-    <string name="ss_puzzle_over_hint">On: the puzzle plays instead of the kind chosen here.</string>
     <string name="ss_videos_hint">Add MP4 or MOV films from the phone page. Plays offline; photos are shown when no film can play.</string>
     <string name="ss_system">System</string>
     <string name="ss_system_hint">The TV\'s own screensaver, as it came with the TV (Xiaomi\'s pictures, for one). Drosophila shows none of its own.</string>

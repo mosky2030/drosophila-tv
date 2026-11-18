@@ -1805,10 +1805,6 @@ fun HomeScreen(
                 else vm.whenUnlocked { AerialSettings.chooseHomeLocked(false); vm.overlay = Overlay.Wallpaper }
             },
             onKids = vm::setUpKidsMode,
-            onStartScreensaver = {
-                vm.overlay = Overlay.None
-                onStartScreensaver()
-            },
             onPin = { on ->
                 if (on) vm.overlay = Overlay.Pin(PinMode.Create) { vm.overlay = Overlay.Wallpaper }
                 // Kids mode cannot be left without a PIN: it goes with it.

@@ -44,15 +44,14 @@ class PuzzleActivity : Activity() {
         // daily photo the owner is actually looking at. init() is idempotent, so Home's own path
         // is unaffected.
         Wallpapers.init(this)
-        // Fade the game window in over black as Home fades out behind it, so the picture,
-        // clock and tiles go together and the board arrives from black rather than snapping
-        // in over a wallpaper that had appeared to stay (see the file header).
-        // Both windows cross-fade at once: Home (picture + clock + tiles, all inside its window)
-        // fades out while this black window fades in, so the screen darkens to black in one
-        // continuous motion; then index.html's curtain brings the board up from black.
-        @Suppress("DEPRECATION")
-        overridePendingTransition(R.anim.fade_in, R.anim.fade_out)
+        // The entering cross-fade is set in MainActivity.right after startActivity(): calling
+        // overridePendingTransition here, in onCreate, is too late for the enter animation and
+        // left a bright frame before this window's black stage covered the screen (the owner,
+        // 2026-11-18: 「点击进去会闪一下白边，然后黑屏」). Leaving's fade still belongs here.
         val root = FrameLayout(this)
+        // The first frame can be this container's, before the WebView has drawn: black here too,
+        // so no firmware default white can show through at the edges.
+        root.setBackgroundColor(Color.BLACK)
         web = WebView(this)
         // Some sets' GPU drivers cannot give Chromium an EGL config at all (the owner's MiTV4:
         // `eglChooseConfig failed with error EGL_BAD_ATTRIBUTE`, Android 6, Chromium 66). The
@@ -78,12 +77,29 @@ class PuzzleActivity : Activity() {
         web.setBackgroundColor(Color.BLACK)
         root.addView(web, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        // A software WebView on Android 6 can put a colour buffer on screen before its first
+        // painted frame — on the MiTV4 it showed as a coloured edge along the right and bottom.
+        // An opaque black view on top covers the WebView until the page has finished loading; the
+        // page's own dark curtain takes over from there and fades the board in (the owner,
+        // 2026-11-18: 「右边和底边会闪一下，现在是彩色的闪」).
+        val cover = View(this).apply { setBackgroundColor(Color.BLACK) }
+        root.addView(cover, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        // Keep the WebView itself off the screen as well: an invisible view still loads and runs
+        // its script, but cannot put an uninitialised buffer at any edge. Both come back together
+        // well after the page has settled, with the black cover on until that same frame.
+        web.visibility = View.INVISIBLE
         setContentView(root)
-        web.requestFocus()
         // saver=1: Home's tile means "play the puzzle" — skip the prototype's own desktop view
         // (its icon row is a dev surface) and go straight to the board. The shell also hands the
         // page whatever picture Home is showing, so the board is that picture.
-        PuzzleShell.bind(web)
+        PuzzleShell.bind(web) {
+            web.postDelayed({
+                web.visibility = View.VISIBLE
+                cover.visibility = View.GONE
+                web.requestFocus()
+            }, 900)
+        }
         web.loadUrl(PuzzleShell.page())
     }
 

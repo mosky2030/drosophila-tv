@@ -749,8 +749,11 @@ fun AppTile(
             text = app.label,
             style = (if (nameAbove)
                 // In the dock the icons are small and sit close together: the name takes a size
-                // down, so the row of names does not crowd.
+                // down, so the row of names does not crowd. The owner (2026-11-18) asked the same
+                // of the squares inside folders in wheel/dock layout; the base layout's wide
+                // tiles keep the full 15.sp name.
                 Type.Headline.copy(fontSize = 12.sp)
+            else if (square) Type.Headline.copy(fontSize = 12.sp)
             else Type.Headline).copy(
                 textAlign = TextAlign.Center,
                 // Names sit on the wallpaper; a soft shadow keeps them readable over bright photos.

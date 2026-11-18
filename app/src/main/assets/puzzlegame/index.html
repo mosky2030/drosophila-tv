@@ -516,7 +516,7 @@ var FADE = {
 /* ------------------------------------------------------------
    ★ 渐进难度：第一次进入从最简单开始，每成功拼完一局自动升一级。
    「愿意玩」= 真的拼完一局；只是打开/退出不升级。进度存 localStorage，
-   关掉页面再回来仍接着走。用户在菜单里手动选难度会固定下来，
+   关掉页面再回来仍接着走；每天第一次打开会重置到 3×2（见文件末尾的当日检查）。用户在菜单里手动选难度会固定下来，
    把难度行调回「自动进阶」即可恢复按进度走。
    ------------------------------------------------------------ */
 var PROGRESS_KEY = 'tvpuzzle.progress.v1';
@@ -1599,6 +1599,22 @@ if(qs.get('img')){
   })();
 }
 applyTune(false);          // 注入默认 / 已存档的斜面样式
+/* 每天第一次进来都从 3×2 开始，不要太难（用户，2026-11-18）。进度仍然当天有效：
+   拼完一局照旧升到 4×3 / 6×4，第二天第一次打开再归零。用本地日期而不是
+   toISOString()：UTC 会在中国时区晚上 8 点之后才翻天。 */
+(function(){
+  var d=new Date();
+  var day=d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2);
+  var key='tvpuzzle.day2.'+day;
+  try{
+    if(localStorage.getItem(key)!=='1'){
+      localStorage.setItem(key,'1');
+      progress.level=0;
+      progress.manual=null;   // 旧的手动固定会压过自动档，每天一并清掉
+      saveProgress();
+    }
+  }catch(e){}
+})();
 S.diff = pickDiff();
 renderMenu();
 renderHome();          // 无论从哪一屏启动，桌面图标 DOM 都先备好

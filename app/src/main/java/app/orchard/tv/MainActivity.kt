@@ -1112,6 +1112,12 @@ class MainActivity : ComponentActivity() {
         // Aerial's own puzzle game opens in its WebView shell.
         if (app.key == PuzzleTile.KEY) {
             open(Intent(this, PuzzleActivity::class.java))
+            // No enter animation at all: a fading window lets Home's aerial SurfaceView — which
+            // lives outside the window and cannot fade — show through at the right and bottom
+            // edges as a coloured flash (the owner, 2026-11-18). The new window is opaque black
+            // from frame one and the page fades its own board in from that black.
+            @Suppress("DEPRECATION")
+            overridePendingTransition(0, 0)
             return
         }
         // Kids and Elders mode shows only its own tiles, and none while locked; this is the last word.

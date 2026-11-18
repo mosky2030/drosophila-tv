@@ -13,7 +13,7 @@ object PuzzleTile {
 
     fun entry(): AppEntry = AppEntry(
         packageName = KEY,
-        label = "拼图游戏",
+        label = "壁纸拼图",
         component = ComponentName("app.orchard.tv", "app.orchard.tv.PuzzleActivity"),
         leanback = false,
         removable = false,

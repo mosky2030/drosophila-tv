@@ -141,14 +141,13 @@ object Wallpapers {
     private var chosenScreensaver by mutableStateOf<ScreensaverMode?>(ScreensaverMode.Aerial)
 
     /**
-     * The screensaver in effect. The puzzle takes it over while its own switch is on, whatever kind
-     * was chosen and whatever the wallpaper. Otherwise, until one is chosen it follows the
-     * wallpaper: aerial films with the aerial wallpaper (and in "Follow App", which has no picture),
-     * photos with a picture, starting from that picture.
+     * The screensaver in effect. Until one is chosen it follows the wallpaper: aerial films with
+     * the aerial wallpaper (and in "Follow App", which has no picture), photos with a picture,
+     * starting from that picture. The puzzle no longer overrides this (2026-11-18): it is played
+     * only from its own app, never as the kind chosen here.
      */
     val screensaver: ScreensaverMode
         get() {
-            if (AerialSettings.puzzleSaver) return ScreensaverMode.Puzzle
             chosenScreensaver?.let { return it }
             return when {
                 isVideo(selectedId) -> ScreensaverMode.Videos
@@ -240,10 +239,11 @@ object Wallpapers {
             null -> firstScreensaver()
             // "wallpaper" was a fourth kind in test builds of 1.38, for what following now is.
             FOLLOW, "wallpaper" -> null
-            // The puzzle was one of the kinds until it became a switch of its own (AerialSettings,
-            // which starts after this). Following the wallpaper here; AerialSettings turns the
-            // switch on and rewrites this key, so turning it off later gives the normal screensaver.
-            ScreensaverMode.Puzzle.key -> null
+            // The puzzle was one of the kinds until it became a switch, and the switch is gone too
+            // (the owner, 2026-11-18): both old forms follow the wallpaper now; the puzzle lives
+            // in its own app. 系统内置 was dropped from the kinds the same day — it did nothing
+            // on this TV — and a Home saved on it follows the wallpaper as well.
+            ScreensaverMode.Puzzle.key, ScreensaverMode.System.key -> null
             else -> ScreensaverMode.of(key)
         }
         rebuildList()
@@ -315,14 +315,9 @@ object Wallpapers {
         if (screensaver != ScreensaverMode.Photos || moves() || isSource()) null else resolve()
 
     fun chooseScreensaver(mode: ScreensaverMode) {
-        // The puzzle is a switch of its own now (AerialSettings.puzzleSaver): choosing it turns the
-        // switch on, and choosing any other kind turns it off, which is what "back to the normal
-        // screensaver" means.
-        if (mode == ScreensaverMode.Puzzle) {
-            AerialSettings.choosePuzzleSaver(true)
-            return
-        }
-        AerialSettings.choosePuzzleSaver(false)
+        // The puzzle is not a screensaver kind any more (the owner, 2026-11-18). An old caller
+        // asking for it is ignored rather than allowed to take the chosen kind over.
+        if (mode == ScreensaverMode.Puzzle) return
         chosenScreensaver = mode
         prefs.edit { putString("screensaver", mode.key) }
         GuardSetup.screensaverModeChanged(app)

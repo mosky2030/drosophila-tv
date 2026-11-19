@@ -14,12 +14,16 @@ JDK 或 SDK 位置，脚本行尾统一成 LF，可执行位也都在。真要�
 |---|---|---|
 | 拉源码 | Mac，`git clone` | 仓库：`https://github.com/mosky2030/drosophila-tv.git` |
 | 准备环境 | Mac 一次性 | JDK 17 + Android SDK + platform-tools |
-| 写三份「机器本地」文件 | Mac 一次性 | `local.properties`、`~/.gradle/gradle.properties`、`local/signing.*` |
+| 照着写两份机器本地配置 | Mac 一次性 | `local.properties`、`~/.gradle/gradle.properties`（第 3.1、3.2 节） |
+| 拷三份「必须一致」的文件 | U 盘 / 网盘 | `local/drosophila-release.jks`、`local/signing.properties`、`local/release_upload.py`（第 3.3、3.4 节） |
 | 改代码 | Mac | 果蝇的源码在 `app/src/main/java/app/orchard/tv/` |
 | 编译 | Mac | `./gradlew :app:assembleStandardRelease` |
 | 推电视 | Mac | `TV=<ip> tools/install.sh`（小米走 ADB，TCL 走多屏互动） |
 | 看效果 | Mac | Android TV 模拟器，见 [MAC_EMULATOR.md](MAC_EMULATOR.md) |
 | 回 Windows | 改完 push | Windows 那边 `git pull` 接着改 |
+
+> 只想**编译 + 推电视**，上面到「推电视」这行就够了。
+> 要跑单元测试，先看第 4.1 节（Robolectric 要自己下 jar）。
 
 ---
 
@@ -78,18 +82,25 @@ sdkmanager --sdk_root="$HOME/Library/Android/sdk" \
 
 ---
 
-## 3. 三份「每台机器各一份」的文件
+## 3. clone 之后必须自己补的文件
 
-这三份**都不进 Git**（仓库的 `.gitignore` 已经挡住了），所以 clone 下来之后必须自己补。
+这些**都不进 Git**（仓库的 `.gitignore` 已经挡住了），所以 clone 下来之后必须自己补。
 漏了哪一份的表现不一样，见第 8 节。
 
-### 3.1 `local.properties` — 告诉 Gradle SDK 在哪
+**分清两类，性质完全不同：**
+
+| | 是什么 | 怎么来 |
+|---|---|---|
+| **① 照着写一份**（2 个） | `local.properties`、`~/.gradle/gradle.properties` | 内容是**这台机器的路径**，Mac 上自己敲一遍。**不用从 Windows 拷** —— 拷过去也是错的 |
+| **② 拷过去**（2~3 个） | `local/drosophila-release.jks`、`local/signing.properties`、`local/release_upload.py` | **必须逐字节一致**，走 U 盘 / 网盘 / 微信传都行。交接包见下 |
+
+### 3.1 `local.properties` — 告诉 Gradle SDK 在哪（照着写）
 
 ```bash
 echo "sdk.dir=$HOME/Library/Android/sdk" > local.properties
 ```
 
-### 3.2 `~/.gradle/gradle.properties` — 告诉 Gradle 用哪个 JDK
+### 3.2 `~/.gradle/gradle.properties` — 告诉 Gradle 用哪个 JDK（照着写）
 
 **必须写全局的那份**（`~/.gradle/gradle.properties`），不要写进仓库里的 `gradle.properties`。
 写进仓库的话，别人 clone 下来路径不对就编不了了 —— 这一条是仓库里 `gradle.properties`
@@ -157,6 +168,21 @@ keytool -list -v -keystore local/drosophila-release.jks -alias drosophila | grep
 
 输出的 SHA-256 必须是上面那串。换了钥匙 → 电视上覆盖不了。
 
+### 3.4 `local/release_upload.py` — 发 GitHub Release 的脚本（拷过去）
+
+也在 `local/` 里，所以同样没跟 git 走。以后在 Mac 上发版要用，得一并拷过去。
+
+```bash
+export GH_TOKEN=<你的 GitHub token>
+python3 local/release_upload.py
+```
+
+- 它读 `GH_TOKEN` **环境变量**，token 不写在文件里，所以脚本本身可以随便传。
+- 脚本里的 `TAG` / `ASSET_NAME` / `NOTES` 是**写死给 1.24 那次发布**的，
+  下次发版**记得改这三个**（tag、文件名、发布说明），否则会拿旧名字去传新包。
+- 它传的 APK 路径是 `app/build/outputs/apk/standard/release/app-standard-release.apk`，
+  所以**先 `./gradlew :app:assembleStandardRelease`** 再跑它。
+
 ---
 
 ## 4. 编译
@@ -215,6 +241,69 @@ systemProp.https.proxyPort=<端口>
 
 > `systemProp.*` 自己**到不了 test JVM**（Gradle 只把它给守护进程）。
 > 工程里已经把这两个值转发给测试进程了，所以上面那几行写一次就够。
+
+#### 4.1.1 镜像是字节级不完美的：两个 jar 要手工补
+
+**Mac 上第一次跑 `./gradlew test` 还会剩下 2 个用例失败**，报错长这样：
+
+```
+java.lang.AssertionError: SHA-512 mismatch for POM file for
+org.robolectric:android-all-instrumented:7.0.0_r1-robolectric-r1-i7
+```
+
+原因不是网络断了，是**腾讯云 Nexus 把 `.pom.sha512` 和 `.jar.sha512` 串了** ——
+Robolectric 要 POM 的校验值，却拿到了同一个 jar 的校验值
+（`0776aacf…` 正好就是那个 jar 的 sha512）。POM 本体也可能是截断的。
+
+**解法：手工把 jar 填进 Maven 缓存，Robolectric 就直接用缓存，不再校验。**
+
+每个 SDK 版本在 `~/.m2` 里要有 4 个文件：
+
+```
+~/.m2/repository/org/robolectric/android-all-instrumented/<版本>/
+    android-all-instrumented-<版本>.jar
+    android-all-instrumented-<版本>.jar.sha512
+    android-all-instrumented-<版本>.pom
+    android-all-instrumented-<版本>.pom.sha512
+```
+
+`.sha512` 侧车是 **128 位十六进制、不带换行**。一次补齐七个版本：
+
+```bash
+M=https://mirrors.cloud.tencent.com/nexus/repository/maven-public/org/robolectric/android-all-instrumented
+R=$HOME/.m2/repository/org/robolectric/android-all-instrumented
+for V in 6.0.1_r3-robolectric-r1-i7 7.0.0_r1-robolectric-r1-i7 \
+         8.0.0_r4-robolectric-r1-i7 9-robolectric-4913185-2-i7 \
+         12-robolectric-7732740-i7 13-robolectric-9030017-i7 14-robolectric-10818077-i7; do
+  mkdir -p "$R/$V"
+  for E in pom jar; do
+    F=android-all-instrumented-$V.$E
+    curl -sL --retry 5 --retry-all-errors --retry-delay 2 -o "$R/$V/$F" "$M/$V/$F"
+    curl -sL --retry 5 --retry-all-errors -o "$R/$V/$F.sha512" "$M/$V/$F.sha512"
+  done
+  # 逐个核对：侧车里写的必须等于文件实际的 sha512
+  for E in pom jar; do
+    F=android-all-instrumented-$V.$E
+    [ "$(tr -d ' \r\n' < "$R/$V/$F.sha512")" = "$(shasum -a 512 "$R/$V/$F" | cut -d' ' -f1)" ] \
+      && echo "✓ $F" || echo "✗ $F 校验不符，重下"
+  done
+done
+```
+
+> 大文件（80–160 MB）下载中途断掉是常事，`--retry` 就是干这个的。
+> 下完**务必逐个核对 sha512**，对不上就单独重下那个文件 —— 不核对的话
+> Robolectric 会拿着错的内容报一个更让人摸不着头脑的错。
+
+补齐后再跑：
+
+```bash
+./gradlew :app:testStandardDebugUnitTest
+```
+
+预期：**36 个测试类 / 239 个用例，全绿**。
+
+> 补完之后 jar 就留在 `~/.m2` 里了，以后都不用再下。
+> 这套东西**两台机器各存一份**，不要试图同步 —— 800 MB，传一次几十秒，比重下还快。
 
 ---
 

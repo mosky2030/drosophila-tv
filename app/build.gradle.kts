@@ -88,6 +88,19 @@ android {
     }
     testOptions {
         unitTests.isIncludeAndroidResources = true
+        // Robolectric downloads its own android-all jar per SDK level, and its default source
+        // (gcp.mirrors.maven.org) does not resolve here; repo1.maven.org redirects to the same
+        // host, so every Robolectric test failed with UnknownHostException.
+        // `systemProp.` in gradle.properties does not reach the forked test JVM, hence this block.
+        // Override the mirror with -ProbolectricRepo=<url>, or in ~/.gradle/gradle.properties.
+        val robolectricRepo = providers.gradleProperty("robolectricRepo")
+            .getOrElse("https://mirrors.cloud.tencent.com/nexus/repository/maven-public")
+        // Java ignores the shell's http_proxy, so a machine behind one needs it here as well.
+        val proxyKeys = listOf("http.proxyHost", "http.proxyPort", "https.proxyHost", "https.proxyPort")
+        unitTests.all { test ->
+            test.systemProperty("robolectric.dependency.repo.url", robolectricRepo)
+            proxyKeys.forEach { key -> System.getProperty(key)?.let { test.systemProperty(key, it) } }
+        }
     }
     packaging {
         resources.excludes += setOf("/META-INF/{AL2.0,LGPL2.1}", "DebugProbesKt.bin", "kotlin-tooling-metadata.json")

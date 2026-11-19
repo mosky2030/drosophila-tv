@@ -182,6 +182,40 @@ app/build/outputs/apk/standard/release/app-standard-release.apk
 
 第一次编译要下 Gradle 8.14.3（wrapper 指向腾讯云镜像，国内快）和一堆依赖，慢是正常的。
 
+### 4.1 跑单元测试前先知道这件事
+
+`./gradlew test` 里有 23 个 Robolectric 用例，它会**按 SDK 级别自己去 Maven 下 `android-all-instrumented` jar**。
+
+Robolectric 默认连的是 `gcp.mirrors.maven.org` —— 这个域名在国内解析不了（DNS 超时），
+而 `repo1.maven.org` 会 302 跳到同一个域名。所以直接跑测试会看到 23 个用例挂在
+`UnknownHostException`，**不是代码坏了，是下不下来**。
+
+工程里已经把源指到腾讯云镜像（和 Gradle 发行版用的是同一个）：
+
+```kotlin
+// app/build.gradle.kts 的 testOptions 里
+val robolectricRepo = providers.gradleProperty("robolectricRepo")
+    .getOrElse("https://mirrors.cloud.tencent.com/nexus/repository/maven-public")
+```
+
+要换源就加 `-P`：
+
+```bash
+./gradlew :app:testStandardDebugUnitTest -ProbolectricRepo=https://maven.aliyun.com/repository/public
+```
+
+**机器在代理后面的话**，Java 不读 shell 的 `http_proxy`，得写进全局 `~/.gradle/gradle.properties`：
+
+```properties
+systemProp.http.proxyHost=127.0.0.1
+systemProp.http.proxyPort=<端口>
+systemProp.https.proxyHost=127.0.0.1
+systemProp.https.proxyPort=<端口>
+```
+
+> `systemProp.*` 自己**到不了 test JVM**（Gradle 只把它给守护进程）。
+> 工程里已经把这两个值转发给测试进程了，所以上面那几行写一次就够。
+
 ---
 
 ## 5. 推电视
@@ -281,6 +315,7 @@ adb shell am broadcast -a app.orchard.tv.CONFIG \
 |---|---|---|
 | Gradle 起不来，报 JDK 版本 | 没指 JDK 17 | 写 `~/.gradle/gradle.properties`，见 3.2 |
 | `SDK location not found` | 没有 `local.properties` | 见 3.1 |
+| 测试挂在 `UnknownHostException: gcp.mirrors.maven.org` | Robolectric 下不到 android-all jar | 见 4.1（工程已指腾讯云镜像，还要确认代理配置） |
 | `INSTALL_FAILED_UPDATE_INCOMPATIBLE` | 签名和电视上那个不是同一把 | 换回正确的 jks；实在不行卸载重装（**会丢果蝇历史**） |
 | 编译出来的是 debug 签名 | `local/signing.properties` 不在 | 见 3.3；`apksigner verify --print-certs` 核对 |
 | `bash\r: No such file or directory` | 行尾变成 CRLF | 仓库的 `.gitattributes` 已处理；`git config core.autocrlf input` 再重新 clone |

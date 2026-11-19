@@ -701,8 +701,12 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Starts moving [key] on Home, or inside the open folder [folder] (issue #1344). */
-    fun startMove(key: String, folder: String? = null) {
-        overlay = folder?.let { Overlay.Folder(it) } ?: Overlay.None
+    fun startMove(key: String, folder: String? = null, showFolder: Boolean = true) {
+        // The Hidden style opens no full-screen folder: its board holds the folder in place, so
+        // the move there must leave the overlay alone (the owner, 2026-11-19: 「隐藏模式下的文件夹
+        // 内的图标无法移动」— the move began over Home's own list, where the app is not, and nothing
+        // moved).
+        overlay = if (showFolder) folder?.let { Overlay.Folder(it) } ?: Overlay.None else Overlay.None
         movingKey = key
         movingInFolder = folder
     }

@@ -1,0 +1,26 @@
+# 行尾统一：仓库里一律存 LF，两台机器（Windows 开发 / macOS 开发）签出时都一样。
+#
+# 为什么要有这个文件：Windows 上 core.autocrlf=true，Mac 上默认 false。没有这条规则的话，
+# 同一份 tools/install.sh 在两台机器上签出的行尾不同，Mac 上跑就报
+# 「/usr/bin/env: 'bash\r': No such file or directory」。
+#
+# 例外：Windows 自己双击运行的批处理必须是 CRLF，否则 cmd.exe 会把它当两行。
+* text=auto eol=lf
+
+*.sh text eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# 二进制：明确标出来，免得哪天有人手滑让 git 去「转换」它们。
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.mp4 binary
+*.mov binary
+*.apk binary
+*.jks binary
+*.keystore binary
+*.docx binary

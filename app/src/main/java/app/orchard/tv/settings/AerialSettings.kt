@@ -3,6 +3,7 @@ package app.orchard.tv.settings
 import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.edit
@@ -109,6 +110,23 @@ enum class ClockPlace(val key: String) {
 }
 
 /**
+ * Desktop pet. The realistic and cartoon flies were taken out (the owner, 2026-11-18: 「写实果蝇
+ * 和卡通果蝇不要了，只保留像素果蝇」); a Home saved on either of those keeps its pet — it just
+ * turns into the pixel one — so nothing it was raising disappears.
+ */
+enum class PetMode(val key: String) {
+    Off("off"), Pixel("pixel");
+
+    companion object {
+        fun of(key: String?) = when (key) {
+            "off" -> Off
+            "pixel", "real", "cartoon" -> Pixel
+            else -> null
+        } ?: Off
+    }
+}
+
+/**
  * How every app's icon is drawn, one look for the whole of Home (the owner: 「现在各种APP图标
  * 颜色乱七八糟…统一图标风格」).
  *
@@ -152,6 +170,22 @@ object AerialSettings {    private const val PREFS = "settings"
 
     /** How every app's icon is drawn (see [IconLook]); the app's own icon unless changed. */
     var iconLook by mutableStateOf(IconLook.Original); private set
+
+    /** Desktop pet shown above the icons, and when this pet was first woken. */
+    var petMode by mutableStateOf(PetMode.Off); private set
+    var petBornAt by mutableLongStateOf(0L); private set
+
+    /** 出生时间的第二个副本（files/pet_birth）：settings.xml 之外的保险，见 [init]。 */
+    private var birthBackup: java.io.File? = null
+
+    private fun readBirthBackup(): Long =
+        runCatching { birthBackup?.takeIf { it.isFile }?.readText()?.trim()?.toLong() }.getOrNull() ?: 0L
+
+    private fun saveBirth(born: Long) {
+        // 两份一起写：先写副本再写设置，任何一份丢了另一份都能把它捞回来。
+        runCatching { birthBackup?.writeText(born.toString()) }
+        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putLong("pet_born_at", born) }
+    }
 
 
     /**
@@ -279,6 +313,13 @@ object AerialSettings {    private const val PREFS = "settings"
      */
     var screensaverClock by mutableStateOf(true); private set
 
+    /**
+     * A rounded frame over the whole screen, always on — Home and every screensaver, from boot
+     * (the owner, 2026-11-19: 「不只是屏保，开机就有，永久化」). Off as it ships; the owner turns
+     * it on in Personalize. The picture shows through a rounded window, black outside it.
+     */
+    var screenFrame by mutableStateOf(false); private set
+
     /** Every app's name under its tile, not only the focused one's (issue #28), the top row's on the glass plate too. */
     private var chosenAllNames by mutableStateOf(false)
 
@@ -336,6 +377,35 @@ object AerialSettings {    private const val PREFS = "settings"
         val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         iconStyle = IconStyle.of(prefs.getString("icon_style", null))
         iconLook = IconLook.of(prefs.getString("icon_look", null))
+        petMode = PetMode.of(prefs.getString("pet_mode", null))
+        // 果蝇的出生时间就是它的全部历史：体型完全由年龄推出来（见 PetGrowth），所以这个时间
+        // 一旦被覆盖，一年的成长就没了。它**只**在「关闭桌宠」时被清掉（那是用户明确要重养
+        // 一只）。为了扛住 settings.xml 被抹掉（清除数据、设置恢复、换签名重装差点失败再装），
+        // 时间在 files/pet_birth 里另存一份，两边都在时取**更早**的那个：多算几天比丢掉一年好。
+        // （the owner, 2026-11-19：「如果以后更新要保留果蝇的生长时间和个头，不要覆盖了历史」）
+        birthBackup = java.io.File(app.filesDir, "pet_birth")
+        val storedBirth = prefs.getLong("pet_born_at", 0L)
+        val backupBirth = readBirthBackup()
+        val born = listOf(storedBirth, backupBirth).filter { it > 0L }.minOrNull() ?: 0L
+        petBornAt = born
+        // 副本缺失或两边不一致时补写（老用户升级上来时副本还不存在，第一次启动就把它建好）
+        if (born > 0L && (born != storedBirth || backupBirth != born)) saveBirth(born)
+        // 两份都空的两种情形：一是从还没有 pet_born_at 的老版本升上来，二是被外力清过数据。
+        // 这时**必须**从现在重新起一只并写盘：让 0 留在那里，年龄会被算成「从 1970 年养到现在」，
+        // 一上来就是满体型，然后在设置面板里随手动一下又缩回最小——看起来就像历史被偷走了
+        //（the owner：「注意更新的时候保留果蝇历史」）。宁可从头养一只，也要状态是明确、连续、
+        // 会自己往下长的。桌宠关着（Off）时不写，等他自己打开再起算。
+        if (born <= 0L && petMode != PetMode.Off) {
+            val now = System.currentTimeMillis()
+            petBornAt = now
+            saveBirth(now)
+        }
+        // 出了上面这种「两份对不上」的情况，光看屏幕是查不出来的：留下每次启动的实底，出事时
+        // adb logcat -s AerialPet 就能看到出生时间到底在哪一版丢的。
+        android.util.Log.i(
+            "AerialPet",
+            "pet born: stored=$storedBirth backup=$backupBirth used=${petBornAt} mode=${petMode.key}",
+        )
         pinnedSources = prefs.getStringSet("pinned_sources", null)?.toSet() ?: emptySet()
         hiddenSources = prefs.getStringSet("hidden_sources", null)?.toSet() ?: emptySet()
         cecSwitch = prefs.getBoolean("cec_switch", false)
@@ -371,13 +441,13 @@ object AerialSettings {    private const val PREFS = "settings"
         wallpaperAlwaysMoves = prefs.getBoolean("wallpaper_always_moves", false)
         showWeather = prefs.getBoolean("show_weather", true)
         screensaverClock = prefs.getBoolean("screensaver_clock", true)
+        // 「不只是屏保，开机就有，永久化」— read before the first composition, so the frame is
+        // already there on the first Home frame after boot, not only after Personalize is opened.
+        screenFrame = prefs.getBoolean("screen_frame", false)
         // The puzzle used to be a switch that overrode the screensaver kind, and before that a
-        // kind of its own. Both are gone (the owner, 2026-11-18): the puzzle lives in its own app,
-        // and a Home saved on either old form goes back to following its wallpaper.
-        val wallpaperPrefs = app.getSharedPreferences(Wallpapers.PREFS, Context.MODE_PRIVATE)
-        if (wallpaperPrefs.getString("screensaver", null) == ScreensaverMode.Puzzle.key) {
-            wallpaperPrefs.edit { putString("screensaver", Wallpapers.FOLLOW) }
-        }
+        // kind of its own. Both are gone (the owner, 2026-11-18), as are videos and 系统内置
+        // (2026-11-19): the puzzle lives in its own app, and Wallpapers.init folds any old saved
+        // kind onto today's four. Only the stale switch key needs clearing here.
         if (prefs.contains("puzzle_saver")) prefs.edit { remove("puzzle_saver") }
         // Before 1.28 this was on or off; on meant whichever sounds Aerial played.
         uiSounds = UiSounds.of(prefs.getString("ui_sounds_kind", null)) ?: when {
@@ -441,6 +511,39 @@ object AerialSettings {    private const val PREFS = "settings"
 
     private fun hash(pin: String): String =
         MessageDigest.getInstance("SHA-256").digest("aerial:$pin".toByteArray()).joinToString("") { "%02x".format(it) }
+
+    fun choosePetMode(mode: PetMode) {
+        petMode = mode
+        // Off forgets the fly, as the prompt beside it promises: the next one hatches from the
+        // start. It used to keep the birth date, so a fly turned off and on came back at its old
+        // age while both the row's hint and the prompt said it started over.
+        // 其余情况一律**沿用**原来的出生时间：换机型、改设置、装新版本都不该让它从头长。
+        val born = when {
+            mode == PetMode.Off -> 0L
+            petBornAt == 0L -> System.currentTimeMillis()
+            else -> petBornAt
+        }
+        petBornAt = born
+        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putString("pet_mode", mode.key) }
+        if (born > 0L) saveBirth(born) else runCatching { birthBackup?.delete() }
+    }
+
+    /**
+     * 直接把果蝇的出生时间定到某个时刻（毫秒）。
+     *
+     * 给「在一台新机器上立刻看到养了很久的果蝇」用：模拟器、换机、给别人看效果，果蝇都是从
+     * 18px 的新生儿开始长，等它长到 180px 要半年。走 ADB 广播（ConfigReceiver 的
+     * `--ei pet_age_days`）调这里，不需要 release 包不可 debuggable 的 `run-as`，也不用手改
+     * settings.xml——那份文件一改就得连 `files/pet_birth` 一起改，漏一份就会被 init 里的
+     * 「取更早的那个」当成数错的旧值（见 [init]）。
+     *
+     * 两份出生时间一起写，所以改完重启进程读到的就是新值。
+     */
+    fun setPetBornAtMs(millis: Long) {
+        val born = millis.coerceAtLeast(0L)
+        petBornAt = born
+        if (born > 0L) saveBirth(born) else runCatching { birthBackup?.delete() }
+    }
 
     fun chooseUiSounds(kind: UiSounds) {
         uiSounds = kind
@@ -522,6 +625,12 @@ object AerialSettings {    private const val PREFS = "settings"
     fun chooseScreensaverClock(on: Boolean) {
         screensaverClock = on
         app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putBoolean("screensaver_clock", on) }
+    }
+
+    /** The rounded screen frame, on Home and in every screensaver, kept across restarts. */
+    fun chooseScreenFrame(on: Boolean) {
+        screenFrame = on
+        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putBoolean("screen_frame", on) }
     }
 
     fun chooseBackAction(action: BackAction) {

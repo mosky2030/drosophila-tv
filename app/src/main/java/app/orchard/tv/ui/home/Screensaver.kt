@@ -43,8 +43,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
@@ -93,23 +96,25 @@ import kotlin.random.Random
 
 /**
  * Aerial's screensaver, shown on Home after a few idle minutes, before the firmware's
- * (ad-carrying) one would start. Four kinds, chosen in Personalize:
+ * (ad-carrying) one would start. Four kinds, chosen in Personalize (the owner, 2026-11-19):
  *
  * - Aerial: Apple TV's aerial films, streamed from Apple, with the place named as the camera moves.
- * - Photos: the owner's own photos (the daily ones when there are none), slowly drifting, each
- *   with where it was taken.
- * - Clock: a large clock over the wallpaper, moving once a minute so nothing burns in.
- * - Videos: the owner's local films, uploaded from the phone page, playing silently offline.
+ * - Daily: Bing's picture of the day, full screen, carried on from Home's wallpaper picture.
+ * - Mine: the owner's uploaded photos, or the bundled demos until then, as a small rounded frame
+ *   floating on black.
+ * - Clock: a large clock cut out of the day's picture, moving once a minute so nothing burns in.
  *
- * If the films cannot be reached, Aerial falls back to Photos. Left and right step to the previous
- * or next film or photo, as on Apple TV; see [ScreensaverSkips].
+ * Video, puzzle and the firmware's own are no longer screensaver kinds. If the films cannot be
+ * reached, Aerial falls back to the daily photo. Left and right step to the previous or next film
+ * or picture, as on Apple TV; see [ScreensaverSkips].
  *
- * Until one is chosen the kind follows the wallpaper (Wallpapers.screensaver): aerial films with the
- * aerial wallpaper, photos with a picture, starting from that picture.
+ * Until one is chosen the kind follows the wallpaper (Wallpapers.screensaver): aerial films with
+ * the aerial wallpaper, My Wallpaper with itself, the daily photo for everything else.
  *
  * With [carry], Home's own wallpaper carries on as the screensaver: the aerial wallpaper's film
- * already moving behind Home, or its picture beginning to draw in there, before the photos move on
- * from it. Home fades away around it (HomeScreen, whose clock becomes the screensaver's).
+ * already moving behind Home, or its picture beginning to draw in there, before the daily photos
+ * move on from it. Home fades away around it (HomeScreen, whose clock becomes the screensaver's).
+ * My Wallpaper does not carry: its first picture shows the rounded frame at once.
  */
 @Composable
 fun Screensaver(visible: Boolean, apps: List<AppEntry>, now: LocalDateTime, skips: ScreensaverSkips, carry: SaverCarry? = null) {
@@ -135,7 +140,6 @@ fun Screensaver(visible: Boolean, apps: List<AppEntry>, now: LocalDateTime, skip
         }
         val context = LocalContext.current
         var aerialFailed by remember { mutableStateOf(false) }
-        var videosFailed by remember { mutableStateOf(false) }
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             when (Wallpapers.screensaver) {
                 ScreensaverMode.Aerial -> if (aerialFailed) PhotoSaver(now, skips.steps) else AerialSaver(
@@ -145,11 +149,16 @@ fun Screensaver(visible: Boolean, apps: List<AppEntry>, now: LocalDateTime, skip
                         AerialStart.start(context)
                     },
                 )
-                ScreensaverMode.Photos -> PhotoSaver(now, skips.steps, remember { Wallpapers.screensaverPicture() })
-                ScreensaverMode.Clock, ScreensaverMode.System -> ClockSaver(apps, now)
-                ScreensaverMode.Videos -> if (videosFailed) PhotoSaver(now, skips.steps) else VideoSaver(skips.steps, leaving = !visible, onUnavailable = { videosFailed = true })
-                ScreensaverMode.Puzzle -> if (!puzzleCanRun(context)) PhotoSaver(now, skips.steps) else PuzzleSaver(skips)
+                // Bing's photo of the day, full screen (the old 照片), carried on from Home's picture.
+                ScreensaverMode.Daily -> PhotoSaver(now, skips.steps, remember { Wallpapers.screensaverPicture() })
+                // My Wallpaper: the owner's photos or the bundled demos, as a rounded frame on black.
+                ScreensaverMode.Mine -> PhotoSaver(now, skips.steps, mine = true)
+                ScreensaverMode.Clock -> ClockSaver(apps, now)
             }
+            // The one fly, projected into the screensaver window from the same PetWorld snapshot the
+            // Home screen draws (the owner, 2026-11-19: 「全部画面都有」). Draw-only, so it never
+            // takes the remote's focus from the screensaver's own keys.
+            PetOverlay(Modifier.fillMaxSize())
         }
     }
 }
@@ -205,7 +214,11 @@ sealed interface SaverCarry {
  * own photos have no name but "My Photo", which says nothing over the photo itself.
  */
 fun stillCaption(wp: app.orchard.tv.wallpaper.Wallpaper): String? =
-    if (wp.kind == WallpaperKind.Photo) null else wp.caption?.takeIf { it.isNotBlank() } ?: wp.title
+    if (wp.kind == WallpaperKind.Photo || wp.kind == WallpaperKind.Mine ||
+        wp.id == app.orchard.tv.wallpaper.Wallpapers.MY_WALLPAPER
+    )
+        null
+    else wp.caption?.takeIf { it.isNotBlank() } ?: wp.title
 
 /** How long one slow push in (or back out) of a still wallpaper takes. */
 private const val DRAW_IN_MS = 60_000
@@ -244,11 +257,10 @@ fun androidx.compose.ui.graphics.drawscope.DrawScope.drawDrawingIn(image: ImageB
  * wallpaper does not play), or the owner's videos over their video wallpaper. Then neither a new
  * player in Home nor the system's dream (a new window, TCL MT5879) comes between them.
  */
-fun saverCarriesWallpaper(context: android.content.Context): Boolean = when {
-    Wallpapers.selectedId == Wallpapers.LIVE -> Wallpapers.screensaver == ScreensaverMode.Aerial && AerialFormats.screensaverCarriesWallpaper(context)
-    Wallpapers.isVideo() -> Wallpapers.screensaver == ScreensaverMode.Videos
-    else -> false
-}
+fun saverCarriesWallpaper(context: android.content.Context): Boolean =
+    Wallpapers.selectedId == Wallpapers.LIVE &&
+        Wallpapers.screensaver == ScreensaverMode.Aerial &&
+        AerialFormats.screensaverCarriesWallpaper(context)
 
 /** Where a screensaver of aerials starts when it cannot carry Home's player on (AerialDream). */
 object AerialStart {
@@ -779,14 +791,21 @@ private fun PhotoSaver(
     first: app.orchard.tv.wallpaper.Wallpaper? = null,
     /** Home already shows [first], drawing in: the photos take over from the second. */
     carried: SaverCarry.Still? = null,
+    /** "My Wallpaper": play its own pictures as a rounded frame on black. */
+    mine: Boolean = false,
 ) {
     val reduced = LocalReducedMotion.current
-    val pool = remember(Wallpapers.items) {
-        // The owner's own photos when there are any, else the daily ones (issue #27).
-        val pictures = Wallpapers.items.filter { it.kind == WallpaperKind.Photo }
-            .ifEmpty { Wallpapers.items.filter { it.kind == WallpaperKind.Daily } }
-        val rest = (pictures.ifEmpty { Wallpapers.items.filter { it.kind == WallpaperKind.Builtin } }).shuffled()
-        if (first == null) rest else listOf(first) + rest.filter { it.id != first.id }
+    val pool = remember(Wallpapers.items, mine) {
+        if (mine) {
+            // The owner's photos, or each bundled demo as its own card, in turn.
+            Wallpapers.mineSaverPictures().shuffled()
+        } else {
+            // The owner's own photos when there are any, else the daily ones (issue #27).
+            val pictures = Wallpapers.items.filter { it.kind == WallpaperKind.Photo }
+                .ifEmpty { Wallpapers.items.filter { it.kind == WallpaperKind.Daily } }
+            val rest = (pictures.ifEmpty { Wallpapers.items.filter { it.kind == WallpaperKind.Builtin } }).shuffled()
+            if (first == null) rest else listOf(first) + rest.filter { it.id != first.id }
+        }
     }
     var slide by remember { mutableIntStateOf(0) }
     var image by remember { mutableStateOf<Pair<Int, ImageBitmap>?>(null) }
@@ -813,6 +832,14 @@ private fun PhotoSaver(
         steps.collect { slide += it }
     }
 
+    // "My Wallpaper" plays its pictures as a small rounded frame floating on black (the owner,
+    // 2026-11-19: 「加上小圆倒角，浮在黑色背景上」, like the reference shot). It is a screensaver
+    // kind now, not tied to which wallpaper Home shows, so the frame follows [mine]. Every other
+    // picture screensaver still fills the screen edge to edge as before.
+    // Once the whole screen has its own permanent frame (HomeScreen.ScreenFrame), that one draws
+    // the border for this screensaver too; keeping the old inner frame here would show two nested
+    // borders. With the global frame off, My Wallpaper keeps its original framed look.
+    val framed = mine && !AerialSettings.screenFrame
     // Each photo fades in over the last, which stays whole beneath it (no dip to black mid-way).
     Dissolve(targetState = image, durationMs = 2000, easing = LinearEasing, label = "photo") { current ->
         if (current != null) {
@@ -820,14 +847,59 @@ private fun PhotoSaver(
             val push = remember { Animatable(0f) }
             LaunchedEffect(Unit) { if (!reduced) push.animateTo(1f, tween(20_000, easing = LinearEasing)) }
             val dir = if (current.first.mod(2) == 0) 1f else -1f
-            Canvas(
-                Modifier.fillMaxSize().graphicsLayer {
-                    val s = 1.04f + 0.08f * push.value
-                    scaleX = s; scaleY = s
-                    translationX = dir * (push.value - 0.5f) * 40.dp.toPx()
-                },
-            ) {
-                drawImage(current.second, dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()), filterQuality = FilterQuality.Medium)
+            if (framed) {
+                // A rounded picture floated on the black background, with a margin all round.
+                // The frame keeps its 16:9 and its corner radius; the push happens inside it.
+                Canvas(Modifier.fillMaxSize()) {
+                    // Opaque black first, so the frame sits on black rather than letting the
+                    // previous full-screen slide show through the margin during a dissolve.
+                    drawRect(Color.Black)
+                    // A 16:9 frame, centred, with a thin margin all round; never stretched.
+                    val margin = size.minDimension * 0.025f
+                    val availW = size.width - margin * 2f
+                    val availH = size.height - margin * 2f
+                    var fw = availW
+                    var fh = fw * 9f / 16f
+                    if (fh > availH) { fh = availH; fw = fh * 16f / 9f }
+                    val left = (size.width - fw) / 2f
+                    val top = (size.height - fh) / 2f
+                    val radius = 22.dp.toPx()
+                    // Cover-crop a 16:9 source window out of the decoded picture, then push it
+                    // slowly inside the frame. crop offsets keep the aspect, so nothing squashes.
+                    val bmp = current.second
+                    var sw = bmp.width
+                    var sh = (sw * 9f / 16f).roundToInt()
+                    if (sh > bmp.height) { sh = bmp.height; sw = (sh * 16f / 9f).roundToInt() }
+                    val sx = (bmp.width - sw) / 2f
+                    val sy = (bmp.height - sh) / 2f
+                    val s = 1.06f + 0.10f * push.value
+                    val cropW = sw / s
+                    val cropH = sh / s
+                    val cropX = sx + (sw - cropW) / 2f + dir * (push.value - 0.5f) * (sw * 0.02f)
+                    val cropY = sy + (sh - cropH) / 2f
+                    clipPath(Path().apply {
+                        addRoundRect(RoundRect(left, top, left + fw, top + fh, radius, radius))
+                    }) {
+                        drawImage(
+                            bmp,
+                            srcOffset = IntOffset(cropX.roundToInt(), cropY.roundToInt()),
+                            srcSize = IntSize(cropW.roundToInt(), cropH.roundToInt()),
+                            dstOffset = IntOffset(left.roundToInt(), top.roundToInt()),
+                            dstSize = IntSize(fw.roundToInt(), fh.roundToInt()),
+                            filterQuality = FilterQuality.Medium,
+                        )
+                    }
+                }
+            } else {
+                Canvas(
+                    Modifier.fillMaxSize().graphicsLayer {
+                        val s = 1.04f + 0.08f * push.value
+                        scaleX = s; scaleY = s
+                        translationX = dir * (push.value - 0.5f) * 40.dp.toPx()
+                    },
+                ) {
+                    drawImage(current.second, dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()), filterQuality = FilterQuality.Medium)
+                }
             }
         }
     }
@@ -836,11 +908,12 @@ private fun PhotoSaver(
 }
 
 /**
- * The clock screensaver: the time alone, full size on black, cut out of the day's picture (the
- * owner's image). No date, weather, lunar day or term. The digits keep Home's own typeface and
- * weight ([Type.Clock]); only their size changes. Bing's daily photo is used when one is there,
- * otherwise whatever Home is showing. A few pixels of drift each minute keep a fixed shape from
- * burning into an OLED panel.
+ * The clock screensaver: the time alone, full size on black, cut out of whatever wallpaper Home is
+ * showing (the owner, 2026-11-19: 「壁纸是什么就显示什么壁纸的时钟镂空图」). No date, weather, lunar
+ * day or term. The digits keep Home's own typeface and weight ([Type.Clock]); only their size
+ * changes. A video wallpaper has no still to cut the digits from, so those show as plain white
+ * clock hands instead (the owner: 「如果选的是视频壁纸，那就是白色时钟」). A few pixels of drift each
+ * minute keep a fixed shape from burning into an OLED panel.
  */
 @Composable
 private fun ClockSaver(apps: List<AppEntry>, now: LocalDateTime) {
@@ -848,9 +921,10 @@ private fun ClockSaver(apps: List<AppEntry>, now: LocalDateTime) {
     val day = now.toLocalDate().toEpochDay()
     val art by produceState<ImageBitmap?>(null, day) {
         value = withContext(Dispatchers.IO) {
-            val wp = Wallpapers.resolve(Wallpapers.LATEST_DAILY)
-                ?: Wallpapers.resolve()
-                ?: Wallpapers.items.firstOrNull()
+            // The current wallpaper is the clock's fill. A video wallpaper has no still frame to
+            // cut out of (picture() would return a gradient stand-in), so leave art null and let
+            // clockCutout draw plain white digits instead.
+            val wp = if (Wallpapers.isVideo()) null else Wallpapers.resolve()
             // No pre-crop: the picture is cover-cropped to the time box at draw time,
             // so its pixels keep their own aspect ratio inside the glyphs (the owner: 「图案有拉伸」).
             wp?.let { Wallpapers.picture(it, 1920, 1080)?.asImageBitmap() }

@@ -112,9 +112,9 @@
     <string name="ss_back_off">Ештеңе істемейді</string>
     <string name="ss_back_choice_hint">Басты экранның жоғарғы қатарында «Артқа» не істейді. Кездейсоқ басылса, өшіріңіз; экран қорғаушы бәрібір өзі басталады.</string>
     <string name="ss_quality">Аэрожиын сапасы</string>
-    <string name="ss_quality_hint">«Авто» осы теледидар көрсете алатын ең жақсысын ойнатады: 4K Dolby Vision, 4K немесе 1080p. Түсқағаз аэрожиын болса, экран қорғаушы бейнені түсқағаздың форматында жалғастырады, экран жыпылықтамайды; 4K Dolby Vision таңдалса, Dolby Vision-ға ауысады, сонда экран бір сәтке қараюы мүмкін. 4K Dolby Vision үшін шамамен 25 Мбит/с керек; бейнелер жиі тоқтаса, 1080p таңдаңыз.</string>
+    <string name="ss_quality_hint">«Авто» осы теледидар көрсете алатын ең жақсысын ойнатады: 4K Dolby Vision, 4K немесе 2K. Түсқағаз аэрожиын болса, экран қорғаушы бейнені түсқағаздың форматында жалғастырады, экран жыпылықтамайды; 4K Dolby Vision таңдалса, Dolby Vision-ға ауысады, сонда экран бір сәтке қараюы мүмкін. 4K Dolby Vision үшін шамамен 25 Мбит/с керек; бейнелер жиі тоқтаса, 2K таңдаңыз.</string>
     <string name="ss_quality_auto">Авто</string>
-    <string name="ss_quality_hd">1080p</string>
+    <string name="ss_quality_hd">2K</string>
     <string name="ss_quality_uhd">4K</string>
     <string name="ss_quality_dv">4K Dolby Vision</string>
     <string name="ss_aerial_keeps">Drosophila теледидарда соңғы %2$d фильмді сақтайды (ең көбі %1$s); тұсқағаз бен скринсейвер оларды кезекпен ойнатады, күн сайын жаңасы қосылады. Скринсейверде оңға — жаңа фильм, солға — алдыңғысы.</string>
@@ -139,6 +139,8 @@
     <string name="st_names_all">Барлық қолданбалар</string>
     <string name="st_names_hint">Атаулар әр қолданбаның астында немесе тек таңдалғанның астында, Apple TV сияқты.</string>
     <string name="ss_kind">Түрі</string>
+    <string name="st_screen_frame">Экран жиегі</string>
+    <string name="st_screen_frame_hint">Қосу арқылы басты экран мен барлық экран қорғауыштарында дөңгелектелген қара жиек пайда болады, қайта іске қосқанда сақталады.</string>
     <string name="wp_weather_city">Орналасқан жер</string>
     <string name="st_home_standard">Екі қатар</string>
     <string name="st_home_one_row">Бір қатар</string>

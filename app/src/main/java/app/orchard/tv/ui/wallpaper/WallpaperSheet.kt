@@ -1,5 +1,6 @@
 package app.orchard.tv.ui.wallpaper
 
+import android.graphics.Bitmap
 import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -68,6 +69,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.NativeKeyEvent
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.text.BasicText
@@ -89,10 +91,13 @@ import app.orchard.tv.settings.Restricted
 import app.orchard.tv.settings.RestrictedKind
 import app.orchard.tv.settings.IconLook
 import app.orchard.tv.settings.IconStyle
+import app.orchard.tv.settings.PetGrowth
+import app.orchard.tv.settings.PetMode
 import app.orchard.tv.settings.UiSounds
 import app.orchard.tv.settings.Effects
 import app.orchard.tv.system.Sounds
 import app.orchard.tv.ui.components.Pressable
+import app.orchard.tv.ui.home.PetWorld
 import app.orchard.tv.ui.components.consumeTaps
 import app.orchard.tv.ui.components.dismissOnTap
 import app.orchard.tv.ui.components.PanelBright
@@ -146,13 +151,30 @@ fun WallpaperSheet(
     val context = LocalContext.current
     var phoneUrl by remember { mutableStateOf<String?>(null) }
     var qr by remember { mutableStateOf<ImageBitmap?>(null) }
+    // Turning the pet off asks first (the owner, 2026-11-19), in this sheet's own glass.
+    var askingPetOff by remember { mutableStateOf(false) }
+    // The answer hands the focus back to the pet row's chosen pill; without it, the question's
+    // node going away sent the focus to the first thing in the sheet — its wallpapers, at the top.
+    val petFocus = remember { FocusRequester() }
+    val petScope = rememberCoroutineScope()
+    fun backToPet() {
+        askingPetOff = false
+        petScope.launch {
+            withFrameNanos { }
+            runCatching { petFocus.requestFocus() }
+        }
+    }
 
     BackHandler(enabled = visible, onBack = onDismiss)
 
     // The phone page listens all along (PhoneServer.listen); the address is read again each time,
     // as the TV's may have changed.
     LaunchedEffect(visible) {
-        if (!visible) return@LaunchedEffect
+        if (!visible) {
+            // Closing the sheet takes the question with it: reopening it must not find one waiting.
+            askingPetOff = false
+            return@LaunchedEffect
+        }
         val url = withContext(Dispatchers.IO) { PhoneServer.start(context) }
         phoneUrl = url
         qr = url?.let { withContext(Dispatchers.Default) { PhoneServer.qr(it).asImageBitmap() } }
@@ -265,6 +287,34 @@ fun WallpaperSheet(
                         listOf(false to R.string.st_names_focused, true to R.string.st_names_all),
                         AerialSettings.showAllNames, AerialSettings::chooseShowAllNames,
                     )
+                    // 「屏幕边框放在主屏幕栏」(the owner, 2026-11-19): it shapes the whole screen,
+                    // Home first, so it belongs here beside the other Home appearance choices —
+                    // not down with the screensaver kinds. The switch itself still turns the frame
+                    // on over Home and every screensaver alike.
+                    Choices(
+                        R.string.st_screen_frame, stringResource(R.string.st_screen_frame_hint), note,
+                        listOf(true to R.string.st_on, false to R.string.st_off),
+                        AerialSettings.screenFrame, AerialSettings::chooseScreenFrame,
+                    )
+                    Choices(
+                        R.string.st_pet, stringResource(R.string.st_pet_hint), note,
+                        listOf(
+                            PetMode.Off to R.string.st_pet_off,
+                            PetMode.Pixel to R.string.st_pet_pixel,
+                        ),
+                        // Off asks first: the fly being raised is lost for good, so one press of a
+                        // pill does not throw it away (the owner, 2026-11-19: the layout settled on
+                        // for the preview — 「关闭桌宠？」 above 「再养养 / 确认关闭」).
+                        AerialSettings.petMode,
+                        { mode ->
+                            when {
+                                mode == PetMode.Off && AerialSettings.petMode != PetMode.Off -> askingPetOff = true
+                                else -> AerialSettings.choosePetMode(mode)
+                            }
+                        },
+                        requester = petFocus,
+                    )
+                    PetDiary()
                     // Apps taken off Home are kept with the rest of how Home looks.
                     SettingRow(R.string.st_hidden_apps, stringResource(R.string.st_hidden_apps_hint), note) {
                         ActionChip(
@@ -334,36 +384,20 @@ fun WallpaperSheet(
                     SettingRow(
                         R.string.ss_kind,
                         when {
-                            Wallpapers.screensaver == ScreensaverMode.Videos -> stringResource(R.string.ss_videos_hint)
                             Wallpapers.screensaverFollows -> stringResource(R.string.ss_follow_hint)
                             AerialSettings.backAction == BackAction.Screensaver -> stringResource(R.string.ss_back_hint)
                             else -> null
                         },
                         note, first = true,
                     ) { ScreensaverChoice() }
-                    // The puzzle switch is gone (the owner, 2026-11-18): with 航拍 or 时钟 chosen it
-                    // took the screensaver over and the two fought each other. The puzzle is now
-                    // only something you open from its own app, one daily picture at a time.
-                    // The clock screensaver is its clock, and the others show none.
-                    if (Wallpapers.screensaver == ScreensaverMode.Aerial || Wallpapers.screensaver == ScreensaverMode.Photos) Choices(
+                    // The clock screensaver is its clock; the other three can show the time over
+                    // their pictures. 视频 / 拼图 / 系统内置 are gone as kinds (the owner, 2026-11-19).
+                    if (Wallpapers.screensaver != ScreensaverMode.Clock) Choices(
                         R.string.ss_show_time, stringResource(R.string.ss_show_time_hint), note,
                         listOf(true to R.string.st_on, false to R.string.st_off),
                         AerialSettings.screensaverClock, AerialSettings::chooseScreensaverClock,
                     )
-                    // The firmware's screensaver starts on the firmware's timer: Aerial's delay
-                    // did nothing there, and Xiaomi's 1 minute came before the 5 chosen (issue #675).
-                    if (Wallpapers.screensaver == ScreensaverMode.System) SettingRow(R.string.ss_delay, null, note) {
-                        val delay = remember { SystemScreensaver.firmwareDelayMs(context) }
-                        BasicText(
-                            when {
-                                delay == null -> stringResource(R.string.ss_delay_system)
-                                delay == 0L -> stringResource(R.string.ss_delay_system_off)
-                                else -> stringResource(R.string.ss_delay_system_minutes, ((delay + 30_000) / 60_000).coerceAtLeast(1).toInt())
-                            },
-                            style = Type.Body.copy(color = Palette.SecondaryLabel),
-                            modifier = Modifier.padding(end = 8.dp),
-                        )
-                    } else Choices(
+                    Choices(
                         R.string.ss_delay, null, note,
                         AerialSettings.screensaverChoices.map {
                             it to when {
@@ -493,6 +527,195 @@ fun WallpaperSheet(
         ) {
             sheet(true)
         }
+
+        // The question over the sheet, in the sheet's own glass and its own two thirds of type.
+        // No dim behind it: a black scrim over the sheet turned the whole panel darker the moment
+        // the question opened, which read as the sheet changing colour rather than as something
+        // lying over it (the owner, 2026-11-19: 「为什么弹出对话框会影响底部个性化菜单的颜色，都变深了」).
+        AnimatedVisibility(
+            visible = askingPetOff,
+            enter = fadeIn(tween(160, easing = Motion.EaseOut)),
+            exit = fadeOut(tween(140, easing = Motion.EaseOut)),
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(SheetHeight)
+                    // A tap beside the card is the question's too: it must not press the row behind.
+                    .consumeTaps(),
+                contentAlignment = Alignment.Center,
+            ) {
+                PetOffPrompt(
+                    onCancel = { backToPet() },
+                    onConfirm = {
+                        AerialSettings.choosePetMode(PetMode.Off)
+                        backToPet()
+                    },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 「果蝇日记」—— 桌宠那一行下面的一句小字（the owner, 2026-11-20：「加一个果蝇日记，在个性化里
+ * 加一句话，养了多少天，长了多少像素，哪天多了一只」）。
+ *
+ * 三件事正好是一条时间线：养了多久、现在多大、下一次（或上一次）多一只是哪天。数字全部来自
+ * PetGrowth / AerialSettings.petBornAt，和屏幕上那只同源——关闭桌宠的确认框报的也是这两个数，
+ * 两处永远不会对不上。
+ *
+ * 日期不是存下来的：第二只、第三只本来就不单独存档，它们是「主果蝇满 180 天 / 满 365 天」那一刻
+ * 出现的（PetGrowth.MATE_1_DAYS / MATE_2_DAYS），所以由出生时间加天数推出来的日子，就是它俩
+ * 真正出生的那一天。
+ *
+ * 桌宠关掉时整行不画：没有果蝇，就没有日记。
+ */
+@Composable
+private fun PetDiary() {
+    if (AerialSettings.petMode == PetMode.Off) return
+    val ctx = LocalContext.current
+    val born = AerialSettings.petBornAt
+    val ageSec = ((System.currentTimeMillis() - born).coerceAtLeast(0L)) / 1000f
+    // 头一天别写「养了 0 天」：出生当天按第 1 天算。
+    val days = (ageSec / 86_400f).toInt().coerceAtLeast(1)
+    val grown = PetGrowth.grown(ageSec)
+    val count = PetGrowth.count(ageSec)
+    val format = remember(ctx) { android.text.format.DateFormat.getMediumDateFormat(ctx) }
+    fun dayOf(index: Int): String =
+        format.format(java.util.Date(born + (PetGrowth.bornOffsetSec(index) * 1000f).toLong()))
+    val line = when (count) {
+        1 -> stringResource(R.string.st_pet_diary_one, days, grown, dayOf(1))
+        2 -> stringResource(R.string.st_pet_diary_two, days, grown, dayOf(1), dayOf(2))
+        else -> stringResource(R.string.st_pet_diary_three, days, grown, dayOf(1), dayOf(2))
+    }
+    BasicText(
+        line,
+        style = Type.Caption.copy(color = Palette.TertiaryLabel),
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 18.dp, end = 18.dp, top = 2.dp, bottom = 10.dp),
+    )
+}
+
+/**
+ * 「关闭桌宠？」 — the layout the pet's own preview settled on: the question, what it costs, and
+ * two answers, the safe one under the focus first. Back is "not now"; the sheet stays open under it.
+ */
+@Composable
+private fun PetOffPrompt(onCancel: () -> Unit, onConfirm: () -> Unit) {
+    // In the sheet's own type, at the sheet's own two thirds: the question reads as one of the
+    // sheet's own headings, not as a poster over it (the owner, 2026-11-19: 「整体对话框和字体都偏大，
+    // 跟面板的个性化里的字号匹配一样就好」). The earlier too-small version was this same scale with
+    // Caption under it; the type here is the sheet's Body, which is what its rows are set in.
+    val base = LocalDensity.current
+    CompositionLocalProvider(LocalDensity provides Density(base.density, base.fontScale * TextScale)) {
+        val cancelReq = remember { FocusRequester() }
+        val confirmReq = remember { FocusRequester() }
+        BackHandler(onBack = onCancel)
+        LaunchedEffect(Unit) {
+            withFrameNanos { }
+            runCatching { cancelReq.requestFocus() }
+        }
+        // What the fly has become, told for the first time here — how long it has been raised and
+        // the pixels it has grown. PetOverlay's own growth curve (PetGrowth), so the two never
+        // disagree. The unit follows the span: minutes for a young fly, hours and days once kept
+        // that long.
+        val ageSec = ((System.currentTimeMillis() - AerialSettings.petBornAt).coerceAtLeast(0L)) / 1000f
+        val totalMin = ((ageSec / 60f).roundToInt()).coerceAtLeast(1)
+        val grown = PetGrowth.grown(ageSec)
+        val span = when {
+            totalMin < 60 -> R.string.st_pet_off_grown to totalMin
+            totalMin < 60 * 24 -> R.string.st_pet_off_grown_h to (totalMin / 60)
+            else -> R.string.st_pet_off_grown_d to (totalMin / (60 * 24))
+        }
+        Column(
+            Modifier
+                .width(360.dp)
+                .consumeTaps()
+                // The sheet's own glass, the same milk and tint it and Control Center are made of:
+                // over the sheet's plate the card then reads as part of the panel, not as a
+                // different material lying on it. Without a dim behind it, the card is almost the
+                // sheet's own colour, so a hairline — the same rim the sheet wears — draws its
+                // edge (the owner, 2026-11-19).
+                .liquidGlass(20.dp, milk = 0.30f, tint = PanelBright)
+                .smoothBorder(1.dp, Color.White.copy(alpha = 0.34f), 20.dp)
+                .padding(horizontal = 24.dp, vertical = 20.dp)
+                // The remote stays on the two answers: Left and Right pick one, Up and Down do
+                // nothing at all rather than wander into the rows behind the question.
+                .onPreviewKeyEvent { e ->
+                    if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                    when (e.nativeKeyEvent.keyCode) {
+                        NativeKeyEvent.KEYCODE_DPAD_LEFT -> { runCatching { cancelReq.requestFocus() }; true }
+                        NativeKeyEvent.KEYCODE_DPAD_RIGHT -> { runCatching { confirmReq.requestFocus() }; true }
+                        NativeKeyEvent.KEYCODE_DPAD_UP, NativeKeyEvent.KEYCODE_DPAD_DOWN -> true
+                        else -> false
+                    }
+                },
+        ) {
+            // The question centred over the card; the two lines under it stay left-aligned.
+            BasicText(
+                stringResource(R.string.st_pet_off_title),
+                style = Type.Headline.copy(textAlign = androidx.compose.ui.text.style.TextAlign.Center),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(12.dp))
+            // Both lines on one plate, left-aligned: what is about to be thrown away, and what
+            // happens if it is (the owner, 2026-11-19: 「把关闭之后这一行字也放在小白框里面吧，
+            // 两排字左对齐」).
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .smoothBackground(Color.White.copy(alpha = 0.07f), 12.dp)
+                    .padding(horizontal = 14.dp, vertical = 11.dp),
+            ) {
+                Column {
+                    BasicText(
+                        stringResource(span.first, span.second, grown),
+                        style = Type.Body,
+                    )
+                    Spacer(Modifier.height(5.dp))
+                    BasicText(
+                        stringResource(R.string.st_pet_off_warn),
+                        style = Type.Body.copy(color = Palette.SecondaryLabel),
+                    )
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+            // White, both of them: the sheet's own pills, the focused one lit — no red anywhere
+            // (the owner, 2026-11-19: 「不要红色按钮，白色就好」).
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                PromptButton(stringResource(R.string.st_pet_off_cancel), cancelReq, onCancel)
+                Spacer(Modifier.width(8.dp))
+                PromptButton(stringResource(R.string.st_pet_off_confirm), confirmReq, onConfirm)
+            }
+        }
+    }
+}
+
+/** One answer: the sheet's own pill, at the sheet's own height and only as wide as its words. */
+@Composable
+private fun PromptButton(label: String, requester: FocusRequester, onClick: () -> Unit) {
+    Pressable(onClick = onClick, focusRequester = requester, focusedScale = 1.05f) { state ->
+        val bg by animateColorAsState(
+            if (state.focused) Palette.Focus else Palette.Fill,
+            tween(140, easing = Motion.EaseOut), label = "prompt-bg",
+        )
+        val fg = if (state.focused) Palette.OnFocus else Palette.Label
+        Row(
+            // The 8dp of drawing room the sheet's chips carry, so the zoom on focus is whole.
+            Modifier
+                .padding(horizontal = 8.dp)
+                .clip(RoundedCornerShape(50))
+                .drawBehind { drawRect(bg) }
+                .height(30.dp)
+                .padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            BasicText(label, style = Type.Body.copy(color = fg))
+        }
     }
 }
 
@@ -513,9 +736,10 @@ private fun WallpaperRows(takeFocus: Boolean) {
         runCatching { first.requestFocus() }
     }
     val dailyTitle = stringResource(R.string.wp_daily_latest)
+    val mineTitle = stringResource(R.string.wp_mine)
     val rotateTitle = stringResource(R.string.wp_photos_rotate)
     val videosTitle = stringResource(R.string.wp_videos_rotate)
-    val list = remember(items, selected, dailyTitle, rotateTitle, videosTitle) {
+    val list = remember(items, selected, dailyTitle, mineTitle, rotateTitle, videosTitle) {
         buildList {
             addAll(items.filter { it.kind == WallpaperKind.Live })
             // Each video on its own, and with two or more one card that plays them in turn (#762).
@@ -523,6 +747,10 @@ private fun WallpaperRows(takeFocus: Boolean) {
             if (videos.size > 1 || selected == Wallpapers.VIDEOS) add(Wallpaper(Wallpapers.VIDEOS, WallpaperKind.Video, videosTitle))
             addAll(videos)
             if (items.any { it.kind == WallpaperKind.Daily }) add(Wallpaper(Wallpapers.LATEST_DAILY, WallpaperKind.Daily, dailyTitle))
+            // "My Wallpaper": the owner's photos in turn, or the bundled demos until then. Kept as
+            // a fixture id so the choice survives an update. Left out entirely when there is no
+            // picture at all to show (the owner, 2026-11-19: 「没有图就不显示我的壁纸按钮」).
+            if (Wallpapers.hasMineWallpapers()) add(Wallpaper(Wallpapers.MY_WALLPAPER, WallpaperKind.Mine, mineTitle))
             addAll(items.filter { it.kind == WallpaperKind.Daily && it.id == selected })
             val photos = items.filter { it.kind == WallpaperKind.Photo }
             // With two or more, one card takes turns through all of them, one a day (#27).
@@ -565,6 +793,7 @@ private fun wallpaperNote(wp: Wallpaper): String? = when {
     wp.id == Wallpapers.VIDEOS -> stringResource(R.string.wp_videos_note)
     wp.kind == WallpaperKind.Video -> stringResource(R.string.wp_video_note)
     wp.kind == WallpaperKind.Source -> stringResource(R.string.wp_source_note)
+    wp.id == Wallpapers.MY_WALLPAPER -> stringResource(R.string.wp_mine_note)
     wp.id == Wallpapers.ROTATE_PHOTOS -> stringResource(R.string.wp_photos_rotate_note)
     wp.kind == WallpaperKind.Photo -> stringResource(R.string.wp_photo_note)
     wp.kind == WallpaperKind.Daily -> wp.caption
@@ -593,7 +822,15 @@ private fun WallpaperCard(wp: Wallpaper, focusRequester: FocusRequester?, onFocu
     val corner = with(density) { CardCorner.toPx() }
     val thumb by produceState<ImageBitmap?>(null, wp.id, Wallpapers.items, picture, cardW, cardH) {
         value = withContext(Dispatchers.Default) {
-            Wallpapers.thumbnail(wp.id)?.let { smoothCut(it, cardW, cardH, corner).asImageBitmap() }
+            Wallpapers.thumbnail(wp.id)?.let { cached ->
+                // The one fly shows on every wallpaper card too (the owner, 2026-11-19:
+                // 「全部画面都有」). thumbnail() is a cache shared with the phone page, so copy
+                // before drawing into it; smoothCut then clips the fly to the card's rounded
+                // corners. A snapshot here is enough — cards are stills, not live canvases.
+                val withFly = cached.copy(Bitmap.Config.ARGB_8888, true)
+                PetWorld.drawInto(withFly)
+                smoothCut(withFly, cardW, cardH, corner).asImageBitmap()
+            }
         }
     }
     Pressable(onClick = { Wallpapers.select(wp.id) }, focusRequester = focusRequester, focusedScale = 1.08f) { state ->
@@ -722,6 +959,8 @@ private fun <T> Choices(
     current: T,
     choose: (T) -> Unit,
     first: Boolean = false,
+    /** Takes the focus back to the chosen pill: an overlay that was over this row hands it here. */
+    requester: FocusRequester? = null,
 ) {
     SettingRow(label, hint, note, first) {
         // A choice with many options (the screensaver's kinds, the sounds) overflows the row: the
@@ -743,7 +982,11 @@ private fun <T> Choices(
                 horizontalArrangement = Arrangement.spacedBy(0.dp),
             ) {
                 options.forEach { (value, text) ->
-                    Chip(if (text is Int) stringResource(text) else text.toString(), on = current == value) { choose(value) }
+                    Chip(
+                        if (text is Int) stringResource(text) else text.toString(),
+                        on = current == value,
+                        requester = requester,
+                    ) { choose(value) }
                 }
             }
         }
@@ -789,8 +1032,16 @@ private fun WeatherValue() {
 
 /** A pill to pick one of a few options: a check on the chosen one, white when focused. */
 @Composable
-private fun Chip(label: String, on: Boolean, onFocused: (() -> Unit)? = null, compact: Boolean = false, onClick: () -> Unit) {
-    Pressable(onClick = onClick, focusedScale = 1.06f) { state ->
+private fun Chip(
+    label: String,
+    on: Boolean,
+    onFocused: (() -> Unit)? = null,
+    compact: Boolean = false,
+    /** The pill that can be handed the focus from outside: the chosen one, see [Choices]. */
+    requester: FocusRequester? = null,
+    onClick: () -> Unit,
+) {
+    Pressable(onClick = onClick, focusRequester = requester?.takeIf { on }, focusedScale = 1.06f) { state ->
         if (onFocused != null) LaunchedEffect(state.focused) { if (state.focused) onFocused() }
         val bg by animateColorAsState(
             when {
@@ -872,9 +1123,11 @@ private fun ActionChip(label: String, glyph: Glyph, onClick: () -> Unit) {
 }
 
 /**
- * All the screensaver kinds, out in the open (the owner, 2026-11-18: 「把所有选项都展开，不用
- * 只显示三个」). The pills are tighter than the settings' usual ones so all five fit without a
- * sideways scroll, and the "Start now" button is gone (same day): the row only picks a type.
+ * The screensaver kinds, out in the open (the owner, 2026-11-18: 「把所有选项都展开，不用
+ * 只显示三个」). Four now (the owner, 2026-11-19): 航拍 / 每日一图 / 我的壁纸 / 时钟. Video,
+ * puzzle and the firmware's own are gone — nobody uses a video as a screensaver. The pills are
+ * tighter than the settings' usual ones so all four fit without a sideways scroll, and the
+ * "Start now" button is gone: the row only picks a type.
  */
 @Composable
 private fun androidx.compose.foundation.layout.RowScope.ScreensaverChoice() {
@@ -883,15 +1136,16 @@ private fun androidx.compose.foundation.layout.RowScope.ScreensaverChoice() {
         horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // 航拍 is the bundled Aerial films; 视频 is the owner's own MP4/MOV, played as real video
-        // (VideoSaver), not a still album — next to 照片 as the two picture sources. 系统内置 is
-        // gone (the owner, 2026-11-18: 「系统内置似乎不起作用，删除吧」).
-        listOf(
-            ScreensaverMode.Aerial to R.string.ss_aerial,
-            ScreensaverMode.Photos to R.string.ss_photos,
-            ScreensaverMode.Videos to R.string.ss_videos,
-            ScreensaverMode.Clock to R.string.ss_clock,
-        ).forEach { (mode, label) ->
+        // 航拍 = the bundled films; 每日一图 = Bing's picture of the day (the old 照片);
+        // 我的壁纸 = the owner's photos or the bundled demos in a rounded frame on black;
+        // 时钟 = the clock. 我的壁纸 is left out entirely when there is no picture to show.
+        val choices = buildList {
+            add(ScreensaverMode.Aerial to R.string.ss_aerial)
+            add(ScreensaverMode.Daily to R.string.ss_daily)
+            if (Wallpapers.hasMineWallpapers()) add(ScreensaverMode.Mine to R.string.ss_mine)
+            add(ScreensaverMode.Clock to R.string.ss_clock)
+        }
+        choices.forEach { (mode, label) ->
             Chip(stringResource(label), on = Wallpapers.screensaver == mode, compact = true) {
                 Wallpapers.chooseScreensaver(mode)
             }

@@ -112,9 +112,9 @@
     <string name="ss_back_off">Ничего не делает</string>
     <string name="ss_back_choice_hint">Что делает «Назад» в верхнем ряду главного экрана. Отключите, если её нажимают случайно; заставка всё равно запустится сама.</string>
     <string name="ss_quality">Качество аэросъёмки</string>
-    <string name="ss_quality_hint">«Авто» воспроизводит лучшее, что может показать этот телевизор: 4K Dolby Vision, 4K или 1080p. С обоями аэросъёмки заставка продолжает ролик в формате обоев, без мигания; если выбрано 4K Dolby Vision, она переключается на Dolby Vision, и экран может на мгновение погаснуть. Для 4K Dolby Vision нужно около 25 Мбит/с; выберите 1080p, если ролики часто подвисают.</string>
+    <string name="ss_quality_hint">«Авто» воспроизводит лучшее, что может показать этот телевизор: 4K Dolby Vision, 4K или 2K. С обоями аэросъёмки заставка продолжает ролик в формате обоев, без мигания; если выбрано 4K Dolby Vision, она переключается на Dolby Vision, и экран может на мгновение погаснуть. Для 4K Dolby Vision нужно около 25 Мбит/с; выберите 2K, если ролики часто подвисают.</string>
     <string name="ss_quality_auto">Авто</string>
-    <string name="ss_quality_hd">1080p</string>
+    <string name="ss_quality_hd">2K</string>
     <string name="ss_quality_uhd">4K</string>
     <string name="ss_quality_dv">4K Dolby Vision</string>
     <string name="ss_aerial_keeps">Drosophila хранит на телевизоре %2$d последних фильма (до %1$s); обои и заставка показывают их по очереди, каждый день добавляется новый. В заставке вправо — новый фильм, влево — предыдущий.</string>
@@ -139,6 +139,8 @@
     <string name="st_names_all">Все приложения</string>
     <string name="st_names_hint">Названия под каждым приложением или только под выбранным, как на Apple TV.</string>
     <string name="ss_kind">Вид</string>
+    <string name="st_screen_frame">Рамка экрана</string>
+    <string name="st_screen_frame_hint">Закруглённая чёрная рамка на главном экране и всех заставках; сохраняется после перезапуска.</string>
     <string name="wp_weather_city">Местоположение</string>
     <string name="st_home_standard">Два ряда</string>
     <string name="st_home_one_row">Один ряд</string>

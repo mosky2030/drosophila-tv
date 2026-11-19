@@ -22,6 +22,7 @@ import app.orchard.tv.settings.KidsLock
 import app.orchard.tv.settings.Restricted
 import app.orchard.tv.settings.RestrictedKind
 import app.orchard.tv.settings.RestrictedRules
+import app.orchard.tv.ui.home.PetWorld
 import app.orchard.tv.guard.HomeGuardService
 import app.orchard.tv.guard.KidsWatch
 import android.os.SystemClock
@@ -109,6 +110,7 @@ class PhoneServer private constructor(private val context: Context, private val 
                         "wallpaperAlwaysMoves" -> { onMain { AerialSettings.chooseWallpaperAlwaysMoves(on) }; true }
                         "showWeather" -> { onMain { AerialSettings.chooseShowWeather(on) }; true }
                         "screensaverClock" -> { onMain { AerialSettings.chooseScreensaverClock(on) }; true }
+                        "screenFrame" -> { onMain { AerialSettings.chooseScreenFrame(on) }; true }
                         else -> false
                     }
                     json(state().put("saved", known))
@@ -232,6 +234,7 @@ class PhoneServer private constructor(private val context: Context, private val 
             .put("rotatePhotos", Wallpapers.ROTATE_PHOTOS)
             .put("screensaver", Wallpapers.screensaver.key)
             .put("screensaverFollows", Wallpapers.screensaverFollows)
+            .put("hasMineWallpapers", Wallpapers.hasMineWallpapers())
             .put("videos", JSONArray().apply {
                 ScreensaverVideos.all(context).forEach { put(JSONObject().put("id", it.id).put("name", it.name)) }
             })
@@ -240,6 +243,7 @@ class PhoneServer private constructor(private val context: Context, private val 
             .put("wallpaperAlwaysMoves", AerialSettings.wallpaperAlwaysMoves)
             .put("showWeather", AerialSettings.showWeather)
             .put("screensaverClock", AerialSettings.screensaverClock)
+            .put("screenFrame", AerialSettings.screenFrame)
             .put("wallpapers", list)
             .put("apps", JSONArray().apply {
                 // Pinned inputs first, then apps by the name Home shows. [default] is the name a
@@ -406,7 +410,12 @@ class PhoneServer private constructor(private val context: Context, private val 
     }
 
     private fun thumb(id: String): Response {
-        val bmp = Wallpapers.thumbnail(java.net.URLDecoder.decode(id, "UTF-8")) ?: return text(Response.Status.NOT_FOUND, "")
+        val cached = Wallpapers.thumbnail(java.net.URLDecoder.decode(id, "UTF-8")) ?: return text(Response.Status.NOT_FOUND, "")
+        // The same fly shows on the phone page's wallpaper previews (the owner, 2026-11-19:
+        // 「全部画面都有」). thumbnail() is a cache shared with the TV cards — copy before drawing
+        // into it, so a phone request never bakes a fly into the cached card bitmap.
+        val bmp = cached.copy(Bitmap.Config.ARGB_8888, true)
+        PetWorld.drawInto(bmp)
         val out = ByteArrayOutputStream()
         bmp.compress(Bitmap.CompressFormat.JPEG, 82, out)
         val bytes = out.toByteArray()

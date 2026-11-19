@@ -21,7 +21,7 @@ class Aerial(
     val id: String,
     val label: String,
     val category: String,
-    /** 1080p H.264, about 10 Mbps: plays everywhere. */
+    /** Apple's 2K AVC stream (shown as 2K in Personalize), about 10 Mbps: plays everywhere. */
     val url: String,
     /** 4K SDR HEVC, about 12 Mbps. */
     val uhd: String,

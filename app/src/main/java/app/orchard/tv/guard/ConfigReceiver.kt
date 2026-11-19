@@ -10,6 +10,7 @@ import app.orchard.tv.settings.IconStyle
 import app.orchard.tv.settings.ClockPlace
 import app.orchard.tv.settings.ClockSize
 import app.orchard.tv.settings.IconLook
+import app.orchard.tv.settings.PetMode
 import app.orchard.tv.settings.Restricted
 import app.orchard.tv.settings.Effects
 import app.orchard.tv.system.DeviceProfile
@@ -193,10 +194,10 @@ class ConfigReceiver : BroadcastReceiver() {
         if (intent.hasExtra("adb_probe_port")) GuardSetup.adbProbePort = intent.getIntExtra("adb_probe_port", 5555)
         if (intent.hasExtra("guard_off_in_standby")) GuardSetup.setOffInStandby(context, intent.getBooleanExtra("guard_off_in_standby", false))
         if (intent.hasExtra("own_screensaver")) GuardSetup.setOwnScreensaver(context, intent.getBooleanExtra("own_screensaver", false))
-        // aerial, photos, clock, videos or system.
+        // aerial, daily, mine or clock (old photos / videos / system / puzzle keys still work).
         intent.getStringExtra("screensaver")?.let { key ->
             Wallpapers.init(context)
-            ScreensaverMode.entries.firstOrNull { it.key == key }?.let { Wallpapers.chooseScreensaver(it) }
+            Wallpapers.chooseScreensaver(ScreensaverMode.of(key))
         }
         // ... --es wallpaper aerial:live   (choose a wallpaper by id, as the phone page does, for
         //                                 measuring with a film; the reply names the one before
@@ -208,6 +209,22 @@ class ConfigReceiver : BroadcastReceiver() {
             val before = Wallpapers.selectedId
             if (id.isNotEmpty()) Wallpapers.select(id)
             resultData = "wallpaper_before=$before aerial_quality=${AerialSettings.aerialQuality.key}"
+            return
+        }
+        // ... --ei pet_age_days 400   (say the desktop fly was born 400 days ago, so it is full
+        //                              size and there are three of them; 0 = a newborn again.
+        //                              For a fresh machine — a laptop's Android TV emulator, a
+        //                              new TV — where waiting half a year for the fly to grow
+        //                              is not an option. Two copies of the birth date are
+        //                              written together, so it survives a restart.
+        intent.hasExtra("pet_age_days")?.let {
+            val days = intent.getIntExtra("pet_age_days", 0).coerceAtLeast(0)
+            val born = System.currentTimeMillis() - days * 86_400_000L
+            AerialSettings.init(context)
+            AerialSettings.setPetBornAtMs(born)
+            // 果蝇关着的时候改出生时间没有意义：开桌宠时如果还是 0，会按「现在」重新记一次。
+            if (AerialSettings.petMode == PetMode.Off) AerialSettings.choosePetMode(PetMode.Pixel)
+            resultData = "pet_born_at=$born age_days=$days"
             return
         }
         // ... --es skip_layers picture,plate   (parts of Home left undrawn until Aerial restarts, to

@@ -415,7 +415,7 @@ class MainActivity : ComponentActivity() {
             // put the owner's own timeout back before anything else, so the screen is not asked
             // to turn off again a moment after it came on. Then the hold on the screen.
             Sleep.restore(context)
-            if (screenNeverOff() && Wallpapers.screensaver != ScreensaverMode.System &&
+            if (screenNeverOff() &&
                 window.attributes.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON == 0
             ) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             idleHandler.postDelayed({
@@ -703,25 +703,19 @@ class MainActivity : ComponentActivity() {
      *
      * Where Aerial's dream is the TV's screensaver (TCL), that dream is the one shown either way:
      * Home's own screensaver was a second one, which the TV's timer then replaced with the dream
-     * (in its own quality), and which never held it off (TCL MT5879). With "System" chosen, Aerial
-     * starts nothing on the timer, and Back starts the firmware's.
+     * (in its own quality), and which never held it off (TCL MT5879). The old "System" kind is
+     * gone (the owner, 2026-11-19): Aerial always shows one of its own four screensavers.
      */
     private fun startScreensaver(asked: Boolean) {
         AerialSettings.relock()
         // A parent who left Kids mode has walked away.
         Restricted.rearm()
-        if (Wallpapers.screensaver == ScreensaverMode.System) {
-            if (asked && !SystemScreensaver.startFirmware(this)) DiagLog.i("no system screensaver to start")
-            return
-        }
-        // Aerials over the aerial wallpaper, or the owner's videos over their video wallpaper: Home
+        // Aerials over the aerial wallpaper: Home
         // carries the wallpaper's film on, the same player in the same format, so there is no black
         // between them; the dream would be a new player in a new window, and showed black even in
         // 4K (TCL MT5879). Not with Dolby Vision chosen by hand, which the wallpaper does not play.
         val carry = saverCarriesWallpaper(this)
-        // The puzzle is a WebView, which needs an Activity's window; the dream is a DreamService
-        // and has none, so the puzzle is always shown here on Home instead of being handed over.
-        if (!carry && Wallpapers.screensaver != ScreensaverMode.Puzzle && !dreamFails(this) && SystemScreensaver.isAerials(this)) {
+        if (!carry && !dreamFails(this) && SystemScreensaver.isAerials(this)) {
             // The dream's film needs the decoder the wallpaper's holds: TCL MT5879 failed Dolby
             // Vision beside it and the dream fell back to 4K HEVC.
             LiveFilm.onHome?.letDecoderGo()
@@ -801,10 +795,7 @@ class MainActivity : ComponentActivity() {
                 window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             }
         }
-        // Not with "System": the firmware's screensaver is wanted then, and holding the screen on
-        // held it off (Xiaomi's starts on its own timer, screen_saver_timeout).
-        else if (Wallpapers.screensaver != ScreensaverMode.System &&
-            window.attributes.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON == 0 && screenNeverOff()) {
+        else if (window.attributes.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON == 0 && screenNeverOff()) {
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }

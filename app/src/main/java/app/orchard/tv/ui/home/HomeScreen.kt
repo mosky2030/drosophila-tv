@@ -58,10 +58,13 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
@@ -639,7 +642,13 @@ fun HomeScreen(
     // lifts and it slowly draws in from just as Home shows it (HomeBackground), and the photos move
     // on from it.
     val stillSaver = remember(vm.screensaverVisible) {
-        if (vm.screensaverVisible && focusedRow == 0 && overlay == Overlay.None && moving == null && Wallpapers.backdrop != null) {
+        // "My Wallpaper" is a screensaver kind now and plays as a rounded frame on black, not a
+        // full-screen carry-over from Home: skipping the carry makes the first picture (e.g. right
+        // after pressing Back) show the frame at once instead of two seconds of the old full-screen
+        // picture (owner, 2026-11-19). The daily-photo screensaver still carries on from Home.
+        if (vm.screensaverVisible && focusedRow == 0 && overlay == Overlay.None && moving == null &&
+            Wallpapers.backdrop != null && Wallpapers.screensaver != ScreensaverMode.Mine
+        ) {
             Wallpapers.screensaverPicture()
         } else null
     }
@@ -672,13 +681,21 @@ fun HomeScreen(
         }
     }
     val carrying = filmSaver || stillSaver != null
+    // Home's icons, clock and dock fade out whenever a screensaver is up — not only when it carries
+    // a wallpaper film/picture on (the owner, 2026-11-19: 「有焦点图标的时候屏保有残留」). Without
+    // this, a screensaver with nothing to carry (My Wallpaper, clock, or aerial films over a photo
+    // wallpaper) left Home's icons drawn underneath; during the screensaver's 1.2 s fade-in their
+    // focus ring showed through the film. Carrying still drives the slower, 2 s hand-over; an
+    // ordinary screensaver fades Home out faster, over the same span as its own fade-in.
+    val homeGone = carrying || vm.screensaverVisible
     val toSaver = remember { Animatable(0f) }
-    LaunchedEffect(carrying) {
+    LaunchedEffect(homeGone, carrying) {
         when {
-            reduced -> toSaver.snapTo(if (carrying) 1f else 0f)
+            reduced -> toSaver.snapTo(if (homeGone) 1f else 0f)
             carrying -> toSaver.animateTo(1f, tween(2000, easing = Motion.EaseInOut))
             // A key woke it: Home comes back at once and settles in, the way it went. At 380 ms the
             // apps' part of it (60% of the way) was over in a blink and read as a cut (issue #357).
+            homeGone -> toSaver.animateTo(1f, tween(1000, easing = Motion.EaseOut))
             else -> toSaver.animateTo(0f, tween(650, easing = Motion.EaseOut))
         }
     }
@@ -686,10 +703,11 @@ fun HomeScreen(
     // it was most of the way back in two or three frames (Xiaomi MiTV-MFTR0: 45-57 ms a frame as it
     // wakes) and leapt; out of the corner and back are one motion run both ways.
     val clockToSaver = remember { Animatable(0f) }
-    LaunchedEffect(carrying) {
+    LaunchedEffect(homeGone, carrying) {
         when {
-            reduced -> clockToSaver.snapTo(if (carrying) 1f else 0f)
+            reduced -> clockToSaver.snapTo(if (homeGone) 1f else 0f)
             carrying -> clockToSaver.animateTo(1f, tween(2000, easing = Motion.EaseInOut))
+            homeGone -> clockToSaver.animateTo(1f, tween(1000, easing = Motion.EaseOut))
             else -> clockToSaver.animateTo(0f, tween(CLOCK_BACK_MS, easing = Motion.EaseInOut))
         }
     }
@@ -728,7 +746,11 @@ fun HomeScreen(
         // came from, to the pill that opened the panel, or to the wallpaper alone — never to a
         // tile that is not drawn.
         if (hidden) {
-            if (hiddenDock && apps.any { it.key == focusedKey }) runCatching { requester(focusedKey!!).requestFocus() }
+            // The board's own list: the folder's apps while one is open in it, Home's otherwise
+            // (a menu closed inside a folder must hand the focus back to that folder's tile, not
+            // to the pill).
+            val board = hiddenFolderId?.let { id -> vm.folderApps[id] }.orEmpty().ifEmpty { apps }
+            if (hiddenDock && board.any { it.key == focusedKey }) runCatching { requester(focusedKey!!).requestFocus() }
             else runCatching { (if (hiddenPillShown) pillRequester else idleRequester).requestFocus() }
         }
         else if (pillFocused && focusedKey != null) runCatching { pillRequester.requestFocus() }
@@ -736,6 +758,9 @@ fun HomeScreen(
     }
     // A folder whose last app left closes.
     LaunchedEffect(overlay, vm.folderApps) {
+        // The Hidden style's folder is a board state, not an overlay: it closes on its own terms.
+        val hiddenOpen = hiddenFolderId
+        if (hidden && hiddenOpen != null && vm.folderApps[hiddenOpen].isNullOrEmpty()) hiddenFolderId = null
         val open = (overlay as? Overlay.Folder)?.id ?: (overlay as? Overlay.AppMenu)?.inFolder ?: return@LaunchedEffect
         if (vm.folderApps[open].isNullOrEmpty()) vm.overlay = Overlay.None
     }
@@ -880,7 +905,14 @@ fun HomeScreen(
                         // On an app tile, Menu opens that app's menu (AppTile): remotes whose held
                         // OK never reads as held had no other way to it (issue #28). Control
                         // Center stays one press up, on the status pill, where Menu still opens it.
-                        if (overlay == Overlay.None && !pillFocused && focusedIndex >= 0) return@onPreviewKeyEvent false
+                        // The Hidden style's board keeps no focusedIndex — its tiles report their
+                        // keys, folder or not — so the test is the focused key against the list the
+                        // board is showing. Without it, Menu inside a folder opened Control Center
+                        // instead of the app's menu, and the app could not be rearranged at all
+                        // (the owner, 2026-11-19: 「隐藏模式下的文件夹内的图标无法移动」).
+                        val boardShown = if (hiddenFolderId != null) vm.folderApps[hiddenFolderId].orEmpty() else apps
+                        val boardTile = hidden && focusedKey != null && boardShown.any { it.key == focusedKey }
+                        if (overlay == Overlay.None && !pillFocused && (focusedIndex >= 0 || boardTile)) return@onPreviewKeyEvent false
                         // Inside a folder, Menu is the focused app's, as on Home.
                         if (overlay is Overlay.Folder) return@onPreviewKeyEvent false
                         vm.overlay = if (overlay is Overlay.ControlCenter) Overlay.None else Overlay.ControlCenter()
@@ -1007,8 +1039,11 @@ fun HomeScreen(
             else scroll.animateTo(target, spring(dampingRatio = 1f, stiffness = 280f))
         }
 
-        // The folder open, or under its app's menu.
-        val openFolder = (overlay as? Overlay.Folder)?.id ?: (overlay as? Overlay.AppMenu)?.inFolder
+        // The folder open, or under its app's menu. The Hidden style's folder lives in the board's
+        // own glass, never as this full-screen view: a menu opened inside one names it for the
+        // move only, so it must not open the view here (the owner, 2026-11-19).
+        val openFolder = (overlay as? Overlay.Folder)?.id
+            ?: (overlay as? Overlay.AppMenu)?.inFolder?.takeIf { !hidden }
         val folderOpen = overlay is Overlay.HiddenApps || openFolder != null
         val ccOpen = overlay is Overlay.ControlCenter
         var sheetIn by remember { mutableStateOf(false) }
@@ -1474,6 +1509,7 @@ fun HomeScreen(
         }
 
         homeShot?.let { shot -> Canvas(Modifier.fillMaxSize()) { drawImage(shot) } }
+        PetOverlay(Modifier.fillMaxSize())
         PanelBackdrop(Wallpapers.frosted.takeIf { Wallpapers.backdrop != null }, { backdropFrost }, { backdropVeil })
 
         // The Hidden style keeps the focus on nothing: this invisible box holds the remote while the
@@ -1518,22 +1554,31 @@ fun HomeScreen(
                 // The app's own menu, as on Home's tiles — rearrange, group, hide — and the move
                 // that follows it works over the board: the moving key is one of the board's
                 // tiles, and Home's move handling moves the app in the arrangement under it.
+                // Opened inside a folder, the menu says so (inFolder): the move then runs over
+                // the folder's own list, which is the only one that holds these apps. Without it
+                // the move searched Home's top-level tiles, found nothing, and did nothing (the
+                // owner, 2026-11-19: 「隐藏模式下的文件夹内的图标无法移动」).
                 onLongPress = { app, bounds ->
                     if (moving == null && !Restricted.active && !vm.noteHomeLocked()) {
                         focusAfterOverlay = app.key
-                        indexAfterOverlay = apps.indexOfFirst { it.key == app.key }.coerceAtLeast(0)
-                        vm.overlay = Overlay.AppMenu(app.key, bounds ?: Rect.Zero)
+                        val list = folderId?.let { id -> vm.folderApps[id] }.orEmpty()
+                            .ifEmpty { apps }
+                        indexAfterOverlay = list.indexOfFirst { it.key == app.key }.coerceAtLeast(0)
+                        vm.overlay = Overlay.AppMenu(app.key, bounds ?: Rect.Zero, inFolder = folderId)
                     }
                 },
                 // A tap on another tile while moving trades the two places, as Home's grid does;
-                // a tap on the moving app itself ends the move (OK does too).
+                // a tap on the moving app itself ends the move (OK does too). Over the folder's
+                // list while moving inside one: those keys are the board's slots there.
                 onMovingTap = { app ->
                     val mover = moving
                     if (mover != null) {
                         if (mover == app.key) vm.endMove()
                         else {
-                            val here = apps.indexOfFirst { it.key == app.key }
-                            val from = apps.indexOfFirst { it.key == mover }
+                            val list = vm.movingInFolder?.let { id -> vm.folderApps[id] }.orEmpty()
+                                .ifEmpty { apps }
+                            val here = list.indexOfFirst { it.key == app.key }
+                            val from = list.indexOfFirst { it.key == mover }
                             if (here >= 0 && from >= 0) vm.moveBy(here - from)
                             runCatching { requester(mover).requestFocus() }
                         }
@@ -1676,14 +1721,20 @@ fun HomeScreen(
         )
 
         val menu = overlay as? Overlay.AppMenu
-        // A menu opened in a folder closes back to the folder.
-        fun closeMenu() { vm.overlay = menu?.inFolder?.let { Overlay.Folder(it) } ?: Overlay.None }
+        // A menu opened in a folder closes back to the folder — the full-screen one on Home; the
+        // Hidden style keeps its folder in the board already, so there is nothing to reopen.
+        fun closeMenu() {
+            vm.overlay = if (!hidden) menu?.inFolder?.let { Overlay.Folder(it) } ?: Overlay.None
+            else Overlay.None
+        }
         AppMenu(
             app = menu?.let { vm.entry(it.key) },
             anchor = menu?.anchor,
             inFolder = menu?.inFolder != null,
             folders = vm.folders(),
-            onMove = { vm.startMove(it, menu?.inFolder) },
+            // The Hidden style has no full-screen folder to open: the move runs over the board's
+            // own folder, which stays where it is.
+            onMove = { vm.startMove(it, menu?.inFolder, showFolder = !hidden) },
             onHide = { key ->
                 closeMenu()
                 vm.hide(key)
@@ -1827,6 +1878,43 @@ fun HomeScreen(
                 stillCarry != null -> stillCarry
                 else -> null
             },
+        )
+
+        // Last in the Box, so it sits above Home *and* every screensaver. Canvas only draws: it
+        // has no pointer input, so the remote, focus and clicks underneath are untouched.
+        // Read on the first composition from saved settings, so it is there from boot (the owner,
+        // 2026-11-19: 「不只是屏保，开机就有，永久化」).
+        if (AerialSettings.screenFrame) ScreenFrame()
+    }
+}
+
+/**
+ * A thin black border with rounded corners over the whole screen: the frame first built for "My
+ * Wallpaper" screensaver, now a permanent, opt-in part of the screen itself. The window is simply
+ * the whole canvas minus a slightly inset rounded rectangle, so every kind of content — Home,
+ * aerials, photos, the clock, the settings sheet — is clipped to the same shape.
+ */
+@Composable
+private fun ScreenFrame() {
+    Canvas(Modifier.fillMaxSize()) {
+        val margin = size.minDimension * 0.025f
+        val radius = 22.dp.toPx()
+        drawPath(
+            path = Path().apply {
+                fillType = PathFillType.EvenOdd
+                addRect(Rect(0f, 0f, size.width, size.height))
+                addRoundRect(
+                    RoundRect(
+                        left = margin,
+                        top = margin,
+                        right = size.width - margin,
+                        bottom = size.height - margin,
+                        radiusX = radius,
+                        radiusY = radius,
+                    ),
+                )
+            },
+            color = Color.Black,
         )
     }
 }

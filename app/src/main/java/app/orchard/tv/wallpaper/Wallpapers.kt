@@ -37,8 +37,9 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-/** Puzzle is one of the four pictures bundled with the TV puzzle game, kept in assets. */
-enum class WallpaperKind { Daily, Builtin, Photo, Live, Video, Source, Puzzle }
+/** Puzzle is one of the four pictures bundled with the TV puzzle game, kept in assets.
+ *  Mine is the "My Wallpaper" entry: a bundled demo until photos are sent from the phone. */
+enum class WallpaperKind { Daily, Builtin, Photo, Live, Video, Source, Puzzle, Mine }
 
 data class Wallpaper(
     val id: String,
@@ -48,13 +49,29 @@ data class Wallpaper(
     val caption: String? = null,
 )
 
-/** System: none of Aerial's; the TV's own screensaver starts as the firmware has it (SystemScreensaver). */
+/** The kinds the screensaver offers now: aerial films, Bing's daily photo, My Wallpaper, and the clock.
+ *  The old video, puzzle and system kinds are kept as keys only so an upgrade reads an old saved
+ *  choice without crashing; [of] maps them onto one of the four, and the picker never shows them. */
 enum class ScreensaverMode(val key: String) {
-    /** Puzzle: the wallpaper as a jigsaw, shuffled and played with the remote (ui/home/Screensaver.kt). */
-    Aerial("aerial"), Photos("photos"), Clock("clock"), Videos("videos"), Puzzle("puzzle"), System("system");
+    Aerial("aerial"),
+    /** Bing's daily photo, one a day, full screen (the old "Photos" kind). */
+    Daily("daily"),
+    /** "My Wallpaper": the owner's photos or the bundled demos, as a rounded frame on black. */
+    Mine("mine"),
+    Clock("clock"),
+    ;
 
     companion object {
-        fun of(key: String?) = entries.firstOrNull { it.key == key } ?: Aerial
+        /** Reads a saved key, mapping the retired kinds onto today's four. */
+        fun of(key: String?): ScreensaverMode = when (key) {
+            Mine.key -> Mine
+            Daily.key, "photos", "videos" -> Daily
+            Clock.key, "system", "puzzle" -> Clock
+            else -> Aerial
+        }
+
+        /** The kinds offered in Personalize, in the order shown. */
+        val offered = listOf(Aerial, Daily, Mine, Clock)
     }
 }
 
@@ -86,6 +103,31 @@ object Wallpapers {
     private const val POSTER_W = 960
     private const val POSTER_H = 540
     const val ROTATE_PHOTOS = "photos:rotate"
+    /**
+     * "My Wallpaper": always listed in Personalize, right after the daily photo. Until the owner
+     * sends photos from the phone it shows the bundled demo (assets/wallpaper/mine-demo.jpg); once
+     * photos exist it picks one a day, just like [ROTATE_PHOTOS]. A fixture id so the choice is
+     * kept across updates whether or not any photo has been uploaded yet.
+     */
+    const val MY_WALLPAPER = "photos:mine"
+    /** Id prefix for each bundled demo as its own wallpaper, so the screensaver can play all of them. */
+    const val MINE_DEMO_PREFIX = "mine:"
+    /**
+     * The demo pictures "My Wallpaper" cycles through until the owner sends photos: a whale, a
+     * sailboat, a mountain lake, a gate above the clouds, a black sports car, a girl before a
+     * planet, a starry campsite and a Coca-Cola polar bear tin. One a day, like the puzzle
+     * pictures, and bundled in assets/wallpaper (never a file the owner can delete).
+     */
+    private val MINE_DEMO_ASSETS = listOf(
+        "wallpaper/mine-demo.jpg",
+        "wallpaper/mine-sail.jpg",
+        "wallpaper/mine-lake.jpg",
+        "wallpaper/mine-gate.jpg",
+        "wallpaper/mine-car.jpg",
+        "wallpaper/mine-space.jpg",
+        "wallpaper/mine-camp.jpg",
+        "wallpaper/mine-fourth.jpg",
+    )
     const val LIVE = "aerial:live"
     const val VIDEOS = "videos:mine"
     const val VIDEO_PREFIX = "video:"
@@ -142,17 +184,18 @@ object Wallpapers {
 
     /**
      * The screensaver in effect. Until one is chosen it follows the wallpaper: aerial films with
-     * the aerial wallpaper (and in "Follow App", which has no picture), photos with a picture,
-     * starting from that picture. The puzzle no longer overrides this (2026-11-18): it is played
-     * only from its own app, never as the kind chosen here.
+     * the aerial wallpaper, My Wallpaper with itself, everything else with the daily photo.
+     * There are only four kinds now (the owner, 2026-11-19): aerial, daily photo, My Wallpaper
+     * and the clock. Video, puzzle and the system's own are gone as choices; old saved keys are
+     * folded into these four by [ScreensaverMode.of].
      */
     val screensaver: ScreensaverMode
         get() {
             chosenScreensaver?.let { return it }
             return when {
-                isVideo(selectedId) -> ScreensaverMode.Videos
+                selectedId == MY_WALLPAPER -> ScreensaverMode.Mine
                 selectedId == LIVE || isSource(selectedId) -> ScreensaverMode.Aerial
-                else -> ScreensaverMode.Photos
+                else -> ScreensaverMode.Daily
             }
         }
 
@@ -239,11 +282,8 @@ object Wallpapers {
             null -> firstScreensaver()
             // "wallpaper" was a fourth kind in test builds of 1.38, for what following now is.
             FOLLOW, "wallpaper" -> null
-            // The puzzle was one of the kinds until it became a switch, and the switch is gone too
-            // (the owner, 2026-11-18): both old forms follow the wallpaper now; the puzzle lives
-            // in its own app. 系统内置 was dropped from the kinds the same day — it did nothing
-            // on this TV — and a Home saved on it follows the wallpaper as well.
-            ScreensaverMode.Puzzle.key, ScreensaverMode.System.key -> null
+            // Every other saved key, including the retired photos / videos / puzzle / system,
+            // is folded onto today's four kinds by ScreensaverMode.of.
             else -> ScreensaverMode.of(key)
         }
         rebuildList()
@@ -310,14 +350,29 @@ object Wallpapers {
         return if (fresh) null else ScreensaverMode.Aerial
     }
 
-    /** The wallpaper's picture, when the photo screensaver starts from it: a picture wallpaper, not the aerial one. */
+    /** The wallpaper's picture, when the daily-photo screensaver starts from it: a picture wallpaper, not the aerial one. */
     fun screensaverPicture(): Wallpaper? =
-        if (screensaver != ScreensaverMode.Photos || moves() || isSource()) null else resolve()
+        if (screensaver != ScreensaverMode.Daily || moves() || isSource()) null else resolve()
+
+    /**
+     * Whether "My Wallpaper" has anything to show: the owner's uploaded photos, or the demos
+     * bundled in assets. With neither, Personalize leaves its chip out (the owner, 2026-11-19).
+     */
+    fun hasMineWallpapers(): Boolean =
+        items.any { it.kind == WallpaperKind.Photo } || MINE_DEMO_ASSETS.isNotEmpty()
+
+    /**
+     * The pictures the "My Wallpaper" screensaver plays through: the owner's uploads if any, else
+     * each bundled demo as its own virtual wallpaper (id "mine:0" ...), so the screensaver can
+     * move from one to the next instead of showing the single day's picture over and over.
+     */
+    fun mineSaverPictures(): List<Wallpaper> {
+        val photos = items.filter { it.kind == WallpaperKind.Photo }.sortedBy { it.id }
+        if (photos.isNotEmpty()) return photos
+        return MINE_DEMO_ASSETS.indices.map { Wallpaper(MINE_DEMO_PREFIX + it, WallpaperKind.Mine, "mine") }
+    }
 
     fun chooseScreensaver(mode: ScreensaverMode) {
-        // The puzzle is not a screensaver kind any more (the owner, 2026-11-18). An old caller
-        // asking for it is ignored rather than allowed to take the chosen kind over.
-        if (mode == ScreensaverMode.Puzzle) return
         chosenScreensaver = mode
         prefs.edit { putString("screensaver", mode.key) }
         GuardSetup.screensaverModeChanged(app)
@@ -328,6 +383,12 @@ object Wallpapers {
         LATEST_DAILY -> items.firstOrNull { it.kind == WallpaperKind.Daily }
         ROTATE_PHOTOS -> items.filter { it.kind == WallpaperKind.Photo }.sortedBy { it.id }.let { photos ->
             if (photos.isEmpty()) resolve(LATEST_DAILY) else photos[Math.floorMod(photoSlot(), photos.size)]
+        }
+        // "My Wallpaper": the owner's photos in turn once any exist, the bundled demo until then.
+        // Never falls back to the daily photo — the card always shows what this entry really is.
+        MY_WALLPAPER -> items.filter { it.kind == WallpaperKind.Photo }.sortedBy { it.id }.let { photos ->
+            if (photos.isEmpty()) Wallpaper(MY_WALLPAPER, WallpaperKind.Mine, "mine")
+            else photos[Math.floorMod(photoSlot(), photos.size)]
         }
         // Inputs are listed after Home starts; until then the input is taken on trust.
         else -> items.firstOrNull { it.id == id }
@@ -347,15 +408,20 @@ object Wallpapers {
 
     /** The turn the rotating photo was last picked for; a new one picks the next photo. */
     private var rotatedOn = Long.MIN_VALUE
+    /** The day "My Wallpaper" last baked its demo picture for. */
+    private var mineBakedOn = Long.MIN_VALUE
 
     /**
-     * Moves "My Photos, in turn" on to the photo for now, and "Puzzle Wallpapers" on to the day's
-     * picture; Aerial calls it whenever Home comes back, and each minute while Home is in front.
+     * Moves "My Photos, in turn" on to the photo for now, "My Wallpaper" on to the next demo
+     * picture, and "Puzzle Wallpapers" on to the day's picture; Aerial calls it whenever Home comes
+     * back, and each minute while Home is in front.
      */
     fun rotateIfDue() {
         if (!started) return
         if (selectedId == ROTATE_PHOTOS && rotatedOn != photoSlot()) { rebuildBackdrop(); return }
-        // A TV left on overnight keeps the picture it baked yesterday until Home looks again.
+        // A TV left on overnight keeps yesterday's demo until Home looks again. Only while no
+        // photos are uploaded: with photos, "My Wallpaper" resolves to the daily photo instead.
+        if (selectedId == MY_WALLPAPER && items.none { it.kind == WallpaperKind.Photo } && mineBakedOn != mineSlot()) { rebuildBackdrop(); return }
         if (selectedId == PUZZLE_WALL && rotatedOn != puzzleSlot()) rebuildBackdrop()
     }
 
@@ -366,6 +432,24 @@ object Wallpapers {
         WallpaperKind.Photo -> File(photoDir, w.id.removePrefix("photo:") + ".jpg")
         else -> null
     }
+
+    /** Which demo "My Wallpaper" shows today: the day, counted round the bundled pictures. */
+    private fun mineSlot(): Long = java.time.LocalDate.now().toEpochDay()
+
+    /**
+     * The bundled demo in "My Wallpaper", read from assets (never a file the owner can delete).
+     * [index] picks one of the demos for the screensaver's virtual "mine:N" cards; without it the
+     * day's picture is used (Home's wallpaper and its thumbnail).
+     */
+    private fun mineDemoPicture(w: Int, h: Int, index: Int? = null): Bitmap? = runCatching {
+        val slot = index?.toLong() ?: mineSlot()
+        val asset = MINE_DEMO_ASSETS[Math.floorMod(slot, MINE_DEMO_ASSETS.size.toLong()).toInt()]
+        app.assets.open(asset).use { input ->
+            BitmapFactory.decodeStream(input)?.let { src ->
+                Images.cover(src, w, h).also { out -> if (out !== src) src.recycle() }
+            }
+        }
+    }.getOrNull()
 
     /**
      * Whether Home shows a picture of its own the puzzle can be made of. Cheap — no picture is
@@ -436,6 +520,8 @@ object Wallpapers {
         WallpaperKind.Video -> videoPicture(wp.id, w, h) ?: Gradients.render(Gradients.presets.first(), w, h)
         WallpaperKind.Source -> Gradients.byKey(SOURCE_PICTURE)?.let { Gradients.render(it, w, h) }
         WallpaperKind.Puzzle -> puzzlePicture(wp.id, w, h)
+        // A screensaver's virtual "mine:N" card picks that demo; Home's "photos:mine" takes the day's.
+        WallpaperKind.Mine -> wp.id.removePrefix(MINE_DEMO_PREFIX).toIntOrNull().let { mineDemoPicture(w, h, it) }
     }
 
     /**
@@ -512,16 +598,19 @@ object Wallpapers {
 
     /** A 16:9 thumbnail for pickers and the phone page. Call off the main thread. */
     fun thumbnail(id: String): Bitmap? {
-        synchronized(thumbs) { thumbs[id] }?.let { return it }
+        // "My Wallpaper" cycles its demo by day: keep one thumbnail per day so the card changes.
+        val cacheKey = if (id == MY_WALLPAPER && items.none { it.kind == WallpaperKind.Photo })
+            "$id|${mineSlot()}" else id
+        synchronized(thumbs) { thumbs[cacheKey] }?.let { return it }
         // A frame kept meanwhile (useLiveFrame) makes this one old: shown, not kept.
         val version = pictureVersion
-        val wp = (if (id == LATEST_DAILY || id == ROTATE_PHOTOS) resolve(id) else items.firstOrNull { it.id == id }) ?: return null
+        val wp = (if (id == LATEST_DAILY || id == ROTATE_PHOTOS || id == MY_WALLPAPER) resolve(id) else items.firstOrNull { it.id == id }) ?: return null
         val b = when (wp.kind) {
             // Not kept while no frame of the film can be had: the next look tries again (issue #1158).
             WallpaperKind.Video -> videoPicture(id, 384, 216) ?: return Gradients.render(Gradients.presets.first(), 384, 216)
             else -> picture(wp, 384, 216)
         }
-        if (b != null) synchronized(thumbs) { if (version == pictureVersion) thumbs[id] = b }
+        if (b != null) synchronized(thumbs) { if (version == pictureVersion) thumbs[cacheKey] = b }
         return b
     }
 
@@ -530,6 +619,7 @@ object Wallpapers {
         val id = selectedId
         backdropJob = scope.launch {
             rotatedOn = photoSlot()
+            mineBakedOn = mineSlot()
             val wp = resolve(id) ?: resolve(DEFAULT_FALLBACK)
             val key = wp?.let(::bakedKey)
             if (key != null && key == bakedKey && backdrop != null) return@launch
@@ -566,6 +656,8 @@ object Wallpapers {
             WallpaperKind.Video -> if (videoFrameIsOf(wp.id)) videoFrame.lastModified() else 0L
             // "Puzzle Wallpapers" takes a different picture each day: the day is part of the bake.
             WallpaperKind.Puzzle -> if (wp.id == PUZZLE_WALL) puzzleSlot() else 0L
+            // "My Wallpaper" cycles its demo pictures by day until photos are sent.
+            WallpaperKind.Mine -> mineSlot()
             else -> 0L
         }
         // "clear": a film's picture baked unshaded, not one kept from when it was shaded.
@@ -1045,7 +1137,7 @@ object Wallpapers {
             }
         }
         if (id != null) {
-            synchronized(thumbs) { thumbs.remove(ROTATE_PHOTOS) }
+            synchronized(thumbs) { thumbs.remove(ROTATE_PHOTOS); thumbs.remove(MY_WALLPAPER) }
             rebuildList()
             select(id)
         }
@@ -1057,9 +1149,9 @@ object Wallpapers {
         // would otherwise reach other files (#57).
         val photo = items.firstOrNull { it.id == id && it.kind == WallpaperKind.Photo } ?: return
         fileFor(photo)?.delete()
-        synchronized(thumbs) { thumbs.remove(id); thumbs.remove(ROTATE_PHOTOS) }
+        synchronized(thumbs) { thumbs.remove(id); thumbs.remove(ROTATE_PHOTOS); thumbs.remove(MY_WALLPAPER) }
         rebuildList()
         if (selectedId == id) select(LATEST_DAILY)
-        else if (selectedId == ROTATE_PHOTOS) rebuildBackdrop()
+        else if (selectedId == ROTATE_PHOTOS || selectedId == MY_WALLPAPER) rebuildBackdrop()
     }
 }

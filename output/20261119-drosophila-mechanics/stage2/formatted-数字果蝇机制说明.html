@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="docx-page-size" content="A4">
+<title>数字果蝇机制说明</title>
+<style>
+  :root {
+    --fs-body: 12pt;
+    --fs-small: 10.5pt;
+    --ff-body: "宋体", SimSun, serif;
+    --ff-head: "黑体", SimHei, sans-serif;
+    --ff-mono: "Consolas", "Courier New", monospace;
+    --c-text: #1a1a1a;
+    --c-muted: #5a5a5a;
+    --c-line: #c9ced6;
+    --c-fill: #f2f5f8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--ff-body); font-size: var(--fs-body); line-height: 1.62; color: var(--c-text); }
+  .cover-title { font-family: var(--ff-head); font-size: 30pt; font-weight: 700; letter-spacing: 2pt; margin-bottom: 10pt; }
+  .cover-sub { font-family: var(--ff-head); font-size: 13pt; color: var(--c-muted); margin-bottom: 26pt; }
+  .cover-meta { font-size: var(--fs-small); color: var(--c-muted); line-height: 1.9; text-indent: 0; }
+  .cover-rule { border: none; border-top: 2px solid var(--c-text); width: 64pt; margin: 18pt 0 22pt 0; }
+  h1 { font-family: var(--ff-head); font-size: 17pt; font-weight: 700; margin: 22pt 0 10pt 0; page-break-after: avoid; }
+  h2 { font-family: var(--ff-head); font-size: 13pt; font-weight: 700; margin: 16pt 0 7pt 0; page-break-after: avoid; }
+  h3 { font-family: var(--ff-head); font-size: 12pt; font-weight: 700; margin: 12pt 0 6pt 0; }
+  p { text-indent: 2em; margin-bottom: 8pt; text-align: justify; }
+  li p, td p, th p { text-indent: 0; }
+  ul, ol { padding-left: 2.2em; margin-bottom: 8pt; }
+  li { margin-bottom: 3pt; }
+  table { border-collapse: collapse; width: 100%; margin: 8pt 0 12pt 0; font-size: var(--fs-small); }
+  th, td { border: 1px solid var(--c-line); padding: 5pt 7pt; text-align: left; vertical-align: top; }
+  th { background: var(--c-fill); font-family: var(--ff-head); font-weight: 700; }
+  code { font-family: var(--ff-mono); font-size: 10.5pt; background: var(--c-fill); padding: 0 2pt; }
+  pre { font-family: var(--ff-mono); font-size: 10.5pt; background: var(--c-fill); border-left: 3px solid var(--c-line); padding: 7pt 9pt; margin: 8pt 0 12pt 0; white-space: pre-wrap; }
+  pre code { background: none; padding: 0; }
+  blockquote { border-left: 3px solid var(--c-line); padding: 1pt 0 1pt 10pt; color: var(--c-muted); margin: 8pt 0 12pt 0; }
+  blockquote p { text-indent: 0; }
+  .doc-toc { margin: 0; }
+  .toc-title { font-family: var(--ff-head); font-size: 15pt; font-weight: 700; margin-bottom: 10pt; }
+  .toc-list, .toc-list ol { list-style: none; list-style-type: none; padding-left: 0; }
+  .toc-list li { margin-bottom: 5pt; text-indent: 0; }
+  .toc-list ol li { margin-left: 2em; margin-bottom: 2pt; font-size: var(--fs-small); color: var(--c-muted); }
+  .toc-list a { color: var(--c-text); text-decoration: none; }
+  hr { border: none; border-top: 1px solid var(--c-line); margin: 14pt 0; }
+</style>
+<style>
+  /* 页面规则：正文页脚居中页码；封面与目录页不放页码 */
+  @page { @bottom-center { content: counter(page); font-family: "宋体", SimSun, serif; font-size: 9pt; color: #666666; } }
+  @page plain { @bottom-center { content: none; } }
+  section[role="cover"] { page: plain; }
+</style>
+</head>
+<body>
+
+<section role="cover">
+<p class="cover-title">数字果蝇机制说明</p>
+<p class="cover-sub">Android TV 桌面桌宠 · 运行 / 姿势 / 成长 / 族群 / 开关</p>
+<hr class="cover-rule">
+<p class="cover-meta">项目：Drosophila（app.orchard.tv）<br>
+文档性质：实现参考，供查阅与修改<br>
+代码状态：versionCode 136 / 1.24 之后的一版（2026-11-19）<br>
+实测环境：模拟器 AerialTV36 1920×1080、电视 MiTV4-ANSM0 1920×1080</p>
+</section>
+<section role="cover">
+<nav class="doc-toc" aria-label="文档目录">
+<p class="toc-title">目录</p>
+<ol class="toc-list">
+<li><a href="#section-1">一、一页速览</a></li>
+<li><a href="#section-2">二、运行：一帧是怎么过的</a><ol>
+<li><a href="#section-2-1">2.1 它挂在哪里</a></li>
+<li><a href="#section-2-2">2.2 心跳</a></li>
+<li><a href="#section-2-3">2.3 一次心跳做四件事</a></li>
+<li><a href="#section-2-4">2.4 画面帧怎么选</a></li>
+<li><a href="#section-2-5">2.5 缩放与取样</a></li>
+</ol></li>
+<li><a href="#section-3">三、姿势与行为：五个状态</a><ol>
+<li><a href="#section-3-1">3.1 状态一览</a></li>
+<li><a href="#section-3-2">3.2 状态怎么流转</a></li>
+<li><a href="#section-3-3">3.3 步态：按距离推进，不按帧</a></li>
+<li><a href="#section-3-4">3.4 为什么撞墙翻面这么少</a></li>
+<li><a href="#section-3-5">3.5 精灵帧索引</a></li>
+</ol></li>
+<li><a href="#section-4">四、成长：一年长到最小值的 10 倍</a><ol>
+<li><a href="#section-4-1">4.1 公式</a></li>
+<li><a href="#section-4-2">4.2 数值表</a></li>
+<li><a href="#section-4-3">4.3 为什么指数是 0.35</a></li>
+<li><a href="#section-4-4">4.4 上限为什么是 180 px</a></li>
+</ol></li>
+<li><a href="#section-5">五、族群：半年两只，一年三只</a><ol>
+<li><a href="#section-5-1">5.1 规则</a></li>
+<li><a href="#section-5-2">5.2 每只的体型怎么来</a></li>
+<li><a href="#section-5-3">5.3 数值表</a></li>
+<li><a href="#section-5-4">5.4 为什么不给成员单独存档</a></li>
+<li><a href="#section-5-5">5.5 想让新成员永远小一号怎么改</a></li>
+<li><a href="#section-5-6">5.6 三只互不重叠</a></li>
+</ol></li>
+<li><a href="#section-6">六、打开与关闭</a><ol>
+<li><a href="#section-6-1">6.1 开关在哪里</a></li>
+<li><a href="#section-6-2">6.2 关闭会发生什么</a></li>
+<li><a href="#section-6-3">6.3 历史是怎么保住的</a></li>
+<li><a href="#section-6-4">6.4 会丢历史的三种操作</a></li>
+</ol></li>
+<li><a href="#section-7">七、调试与验证</a><ol>
+<li><a href="#section-7-1">7.1 网页 Demo</a></li>
+<li><a href="#section-7-2">7.2 设置面板里的调试行</a></li>
+<li><a href="#section-7-3">7.3 在模拟器上把年龄改成任意天</a></li>
+<li><a href="#section-7-4">7.4 看启动时读到的出生时间</a></li>
+<li><a href="#section-7-5">7.5 实测记录（2026-11-19，模拟器 1920×1080）</a></li>
+</ol></li>
+<li><a href="#section-8">八、想改什么改哪里</a></li>
+<li><a href="#section-9">九、踩过的坑</a></li>
+<li><a href="#section-10">附录 A 文件清单</a></li>
+<li><a href="#section-11">附录 B 参数字典</a></li>
+</ol>
+</nav>
+</section>
+<section class="chapter" data-page-restart="1">
+<h1 id="section-1">一、一页速览</h1>
+<p>本文说明 Android TV 桌面（<code>app.orchard.tv</code>，Drosophila）上那只数字果蝇的全部机制：它怎么跑起来、有哪几种姿势、怎么长大、什么时候变成两只三只、怎么开怎么关，以及想改哪一条该动哪个文件。文中所有数字都取自当前代码，实测数据来自 2026-11-19 的模拟器验证。</p>
+<p>一句话概括：<strong>它是一只活在桌面图标上层的像素果蝇，把「出生时间」当作唯一的历史，体型、只数、年龄提示全部由这个时间推导出来。</strong></p>
+<table>
+<thead><tr><th>项目</th><th>数值</th><th>出处</th></tr></thead>
+<tbody>
+<tr><td>出生体型</td><td>18 px</td><td><code>PetGrowth.MIN_PX</code></td></tr>
+<tr><td>满周岁体型</td><td>180 px（最小的 10 倍）</td><td><code>PetGrowth.MAX_PX</code></td></tr>
+<tr><td>成长曲线</td><td><code>(天数/365)^0.35</code></td><td><code>PetGrowth.fraction</code></td></tr>
+<tr><td>满周岁耗时</td><td>365 天</td><td><code>PetGrowth.YEAR_DAYS</code></td></tr>
+<tr><td>第二只出现</td><td>养满 180 天</td><td><code>PetGrowth.MATE_1_DAYS</code></td></tr>
+<tr><td>第三只出现</td><td>养满 365 天</td><td><code>PetGrowth.MATE_2_DAYS</code></td></tr>
+<tr><td>只数上限</td><td>3 只</td><td><code>PetGrowth.MAX_FLIES</code></td></tr>
+<tr><td>成员间距</td><td>各只体型 × 0.55 相加，再加 10 px</td><td><code>PetOverlay.separateFlock</code></td></tr>
+<tr><td>心跳</td><td>33 ms 一帧（约 30 fps）</td><td><code>PetOverlay</code></td></tr>
+<tr><td>爬行速度</td><td>170–230 px/s</td><td><code>PetOverlay.step</code></td></tr>
+<tr><td>飞行速度</td><td>1000–1200 px/s（约 5.5 倍）</td><td><code>PetOverlay.step</code></td></tr>
+<tr><td>撞墙翻面概率</td><td>约每 11 分钟一次</td><td>飞行取向只 3% 直冲墙</td></tr>
+<tr><td>精灵图</td><td>15 张 64×64 PNG</td><td><code>res/drawable-nodpi/fly_frame_*</code></td></tr>
+</tbody></table>
+</section>
+<section class="chapter">
+<h1 id="section-2">二、运行：一帧是怎么过的</h1>
+<h2 id="section-2-1">2.1 它挂在哪里</h2>
+<p>果蝇是 <code>HomeScreen</code> 最上层的一个全屏 <code>Canvas</code>（<code>HomeScreen.kt</code> 里 <code>PetOverlay(Modifier.fillMaxSize())</code>），画在图标和壁纸之上。它只画、不接收按键，所以遥控器焦点永远在图标上，果蝇不会抢焦点。</p>
+<h2 id="section-2-2">2.2 心跳</h2>
+<p><code>PetOverlay</code> 里有一个协程，每 33 毫秒推进一次，时间步长固定为 33 毫秒：</p>
+<ul><li>不读取真实经过的时间。机器卡一下，果蝇是「慢动作」，而不是「瞬移」——这一点是刻意的，移动端帧间隔抖动很大，用固定步长行为才稳定。</li><li>每一帧会<strong>重新读一次</strong>「桌宠开关」和「出生时间」。设置面板里一改，下一帧就生效，不需要重启桌面。</li></ul>
+<h2 id="section-2-3">2.3 一次心跳做四件事</h2>
+<ol><li>算年龄：<code>now - 出生时间</code>，出生时间为 0 时按 0 岁处理（绝不当成 1970 年）。</li><li>算该有几只：1 只、2 只还是 3 只（见第五节）。</li><li>对齐名册：不够就补一只，多了就减一只。</li><li>逐只推进状态机，并把体型写进各自的状态里。</li></ol>
+<h2 id="section-2-4">2.4 画面帧怎么选</h2>
+<p>所有动画都由「第几帧」这个计数器推出来，不引第二套时钟：仰面用第 14 帧；飞行时第 3、13 帧交替（15 Hz 扇翅）；爬行按步态相位取第 3–10 帧；呆着时第 1、0、1、2 帧轮流（每 13 帧换一档，就是头部左右慢慢摆）；此外每 8 秒（242 帧）有一次极快的收翅动作，第 3→11→12→13→12→11 帧在 8 帧内走完。</p>
+<h2 id="section-2-5">2.5 缩放与取样</h2>
+<p>画的时候把 64 px 的精灵图缩放到当前体型。规则是：</p>
+<ul><li>体型大于 64 px（放大）用最近邻取样，像素格子变粗、边缘不糊；</li><li>体型小于 64 px（缩小）用双线性取样，避免抽点把细腿抽断。</li></ul>
+<p>这是 2026-11-18 踩过的坑：早期版本对放大也做插值，翅膀左右落在不同像素网格上，越折越歪。</p>
+</section>
+<section class="chapter">
+<h1 id="section-3">三、姿势与行为：五个状态</h1>
+<h2 id="section-3-1">3.1 状态一览</h2>
+<table>
+<thead><tr><th>状态</th><th>含义</th><th>时长</th><th>速度</th><th>用哪一帧</th></tr></thead>
+<tbody>
+<tr><td>呆着 <code>S_IDLE</code></td><td>原地不动，只有头左右摆</td><td>0.6–8 秒（爬完）/ 0.8–6 秒（飞完）</td><td>0</td><td>第 1/0/1/2 帧轮流</td></tr>
+<tr><td>爬 <code>S_CRAWL</code></td><td>直线快走，八帧步态</td><td>走完 30–420 px 即停</td><td>170–230 px/s</td><td>步态第 3–10 帧</td></tr>
+<tr><td>飞 <code>S_FLY</code></td><td>S 形曲线，高频扇翅</td><td>飞完 420–900 px 即落</td><td>1000–1200 px/s</td><td>第 3、13 帧交替</td></tr>
+<tr><td>仰面 <code>S_BACK</code></td><td>翻过来躺着，偶尔蹬一下腿</td><td>0.8–1.7 秒</td><td>0</td><td>第 14 帧</td></tr>
+<tr><td>自转 <code>S_SPIN</code></td><td>仰面疯狂自转，小范围乱蹭</td><td>2.6–4.6 秒</td><td>角速度 720 起，加速到 2340 度/秒</td><td>第 14 帧 + 实时旋转</td></tr>
+</tbody></table>
+<h2 id="section-3-2">3.2 状态怎么流转</h2>
+<p>「呆着」是枢纽。每次呆够时间后掷一次骰子：<strong>30% 起飞，70% 开始爬</strong>。爬完、飞完都回到「呆着」。唯一的例外是飞行撞到桌面边缘，会翻成「仰面」，躺一会儿转成「自转」，转完硬切回「呆着」。</p>
+<p>设计意图（用户 2026-11-19 定的调子）：大部分时间应该是爬着、走动、飞行这些基本动作；撞墙仰面自转是极小概率的意外，不该经常出现。</p>
+<h2 id="section-3-3">3.3 步态：按距离推进，不按帧</h2>
+<p>走路的八帧由「步态相位」<code>gait</code> 驱动，相位每帧按当前速度增加：<code>gait += 0.033 × (0.8 + 速度 × 0.006)</code>，取值 0 到 1，乘 8 就是当前该用第几帧。</p>
+<p>早期版本是「每帧换一帧」，等于固定每秒 3.75 步。爬速从 320 降到 200 之后，那套算法就变成了「原地狂奔」：脚动得飞快、身体几乎不动。改成按距离推进之后，步子跟着地面速度走，慢走就是慢步子。</p>
+<h2 id="section-3-4">3.4 为什么撞墙翻面这么少</h2>
+<p>正常飞行在起飞时会先做两件事：</p>
+<ol><li><strong>看前方还有多远</strong>：沿当前朝向算到飞行边界的距离，如果不足 320 px，就掉头朝屏幕中心飞；</li><li><strong>把距离收进桌面</strong>：用和飞行完全相同的积分式（朝向按正弦摆）把整条弯曲航迹预演一遍，一碰到边界就在那里截断，下限 120 px。</li></ol>
+<p>只有 3% 的飞行是「直冲边缘」，也就是刻意的撞墙，才会真的翻面。改之前不做预演，实测 46% 的飞行以撞墙结束，翻面从意外变成了常态。</p>
+<h2 id="section-3-5">3.5 精灵帧索引</h2>
+<table>
+<thead><tr><th>索引</th><th>内容</th></tr></thead>
+<tbody>
+<tr><td>00–02</td><td>静止摆头的三个角度</td></tr>
+<tr><td>03–10</td><td>八分之一步态</td></tr>
+<tr><td>11–13</td><td>收翅（爆发动作）</td></tr>
+<tr><td>14</td><td>仰面</td></tr>
+</tbody></table>
+<p>这一套是 <code>tools/psd_bake.py</code> 从分层 PSD 烘出来的：头和六条腿各自独立旋转、右半边逐像素镜像。运行时只有「仰面自转」这一个旋转是实时的。</p>
+</section>
+<section class="chapter">
+<h1 id="section-4">四、成长：一年长到最小值的 10 倍</h1>
+<h2 id="section-4-1">4.1 公式</h2>
+<pre><code>进度 = min(1, 天数 / 365) ^ 0.35
+体型 = 18 + 进度 × (180 - 18)</code></pre>
+<h2 id="section-4-2">4.2 数值表</h2>
+<table>
+<thead><tr><th>养了多久</th><th>体型</th><th>占满体型</th><th>累计长大</th></tr></thead>
+<tbody>
+<tr><td>出生</td><td>18 px</td><td>10%</td><td>0 px</td></tr>
+<tr><td>半天</td><td>34 px</td><td>19%</td><td>16 px</td></tr>
+<tr><td>1 天</td><td>38 px</td><td>21%</td><td>20 px</td></tr>
+<tr><td>3 天</td><td>48 px</td><td>27%</td><td>30 px</td></tr>
+<tr><td>1 周</td><td>59 px</td><td>33%</td><td>41 px</td></tr>
+<tr><td>2 周</td><td>70 px</td><td>39%</td><td>52 px</td></tr>
+<tr><td>1 个月</td><td>86 px</td><td>48%</td><td>68 px</td></tr>
+<tr><td>2 个月</td><td>104 px</td><td>58%</td><td>86 px</td></tr>
+<tr><td>3 个月</td><td>117 px</td><td>65%</td><td>99 px</td></tr>
+<tr><td>4 个月</td><td>128 px</td><td>71%</td><td>110 px</td></tr>
+<tr><td>5 个月</td><td>137 px</td><td>76%</td><td>119 px</td></tr>
+<tr><td>半年</td><td>145 px</td><td>80%</td><td>127 px</td></tr>
+<tr><td>8 个月</td><td>158 px</td><td>88%</td><td>140 px</td></tr>
+<tr><td>10 个月</td><td>169 px</td><td>94%</td><td>151 px</td></tr>
+<tr><td>1 年</td><td>180 px</td><td>100%</td><td>162 px</td></tr>
+</tbody></table>
+<p>满一年之后不再变大。</p>
+<h2 id="section-4-3">4.3 为什么指数是 0.35</h2>
+<p>这个指数要同时满足三件事，试出来的：</p>
+<ul><li><strong>头一天得看得出长了一点</strong>。18 到 38 px，一夜之间身子大了一圈，养着才有反馈；</li><li><strong>一个月不能把增长用光</strong>。30 天 86 px，还剩三分之二的路可以走；</li><li><strong>一年收口</strong>。线性曲线前几周几乎看不出来（每天零点几像素，比屏幕像素还细），平方根曲线又会在头十天把大半增长吃掉。</li></ul>
+<h2 id="section-4-4">4.4 上限为什么是 180 px</h2>
+<p>上限等于最小值的 10 倍，是用户 2026-11-19 明确要求的（原话是「最大的时候是最小的时候的 10 倍，现在感觉是大概 4-5 倍」）。</p>
+<p>历史背景：上一版权重上限是精灵图的原生尺寸 64 px，那样最大只有最小的 3.6 倍，在电视上仍然像个「小虫子」。代价是 180 px 相当于把 64 px 的图放大 2.8 倍，像素格子会变粗——而这正是像素风该有的样子，所以放大时改用最近邻取样，只放大不糊。</p>
+<p>最小值 18 px 也不是随手定的：试过 14 px 和 11 px，在 1080p 电视上只剩一团色块，认不出是苍蝇。</p>
+</section>
+<section class="chapter">
+<h1 id="section-5">五、族群：半年两只，一年三只</h1>
+<h2 id="section-5-1">5.1 规则</h2>
+<table>
+<thead><tr><th>主果蝇年龄</th><th>场上只数</th><th>构成</th></tr></thead>
+<tbody>
+<tr><td>不足 180 天</td><td>1 只</td><td>主果蝇</td></tr>
+<tr><td>满 180 天</td><td>2 只</td><td>一大一小</td></tr>
+<tr><td>满 365 天</td><td>3 只</td><td>两大一小</td></tr>
+<tr><td>之后</td><td>3 只（封顶）</td><td>不再增加</td></tr>
+</tbody></table>
+<h2 id="section-5-2">5.2 每只的体型怎么来</h2>
+<p>第二只、第三只有自己的出生时间，这个时间是从主果蝇算出来的：第二只「出生」在主果蝇满 180 天的那一刻，第三只「出生」在满 365 天那一刻。之后每只按自己的年龄走同一条成长曲线。</p>
+<p>这样一来，刚满半年那天冒出来的第二只就是最小的 18 px，一岁时第二只已经 185 天大（约 146 px）、第三只刚出生（18 px），正好是用户要的「两大一小」。</p>
+<h2 id="section-5-3">5.3 数值表</h2>
+<table>
+<thead><tr><th>主果蝇年龄</th><th>只数</th><th>各只体型</th></tr></thead>
+<tbody>
+<tr><td>180 天</td><td>2</td><td>144 / 18</td></tr>
+<tr><td>200 天</td><td>2</td><td>149 / 77</td></tr>
+<tr><td>300 天</td><td>2</td><td>169 / 128</td></tr>
+<tr><td>365 天</td><td>3</td><td>180 / 146 / 18</td></tr>
+<tr><td>400 天</td><td>3</td><td>180 / 154 / 89</td></tr>
+<tr><td>500 天</td><td>3</td><td>180 / 173 / 132</td></tr>
+<tr><td>730 天</td><td>3</td><td>180 / 180 / 180</td></tr>
+</tbody></table>
+<h2 id="section-5-4">5.4 为什么不给成员单独存档</h2>
+<p>因为「更新之后变回一只」是最难查的一类故障。现在只存一个出生时间，只数完全由年龄推导，所以只要主果蝇的历史还在，族群数量就一定是对的——重装、升级、换机型都不会把三只变回一只。</p>
+<h2 id="section-5-5">5.5 想让新成员永远小一号怎么改</h2>
+<p>当前设计里新成员自己也会长大，养久了三只一样大（730 天那一行）。如果希望「小的永远小」，把 <code>PetGrowth.pxOf</code> 里第二、第三只的年龄换成一个固定值即可，例如：</p>
+<pre><code>fun pxOf(index: Int, ageSec: Float, preview: Int): Float =
+    if (index == 0) px(ageSec, preview) else px(30 * 86_400f, preview)</code></pre>
+<p>这样新成员会固定在「养了一个月」的 86 px，不再继续长大。</p>
+<h2 id="section-5-6">5.6 三只互不重叠</h2>
+<p>每只都有按自己体型算出的半径（体型的 0.55 倍）。每一轮状态推进结束后，检查所有成员两两之间的距离；一旦小于两半径之和再加 10 px，就把两只对称推开，推完再夹回屏幕边界内。两只满体型（180 px）时中心至少要隔开 208 px。</p>
+<p>放在状态推进之后做，是为了让「两只正朝对方爬」看起来像擦肩而过，而不是穿过去叠成一只。仰面自转是绕各自的 <code>spinX/spinY</code> 画小圈，推开一个成员的时候圆心也要跟着搬同样的距离，否则下一帧它就被拉回原处、又重叠了。</p>
+</section>
+<section class="chapter">
+<h1 id="section-6">六、打开与关闭</h1>
+<h2 id="section-6-1">6.1 开关在哪里</h2>
+<p>设置面板 → 个性化 → 桌宠，两档：关闭 / 像素果蝇。入口在首页按菜单键呼出的控制中心里。</p>
+<h2 id="section-6-2">6.2 关闭会发生什么</h2>
+<p>选「关闭」不会立刻生效，会先弹一个确认框，框里报两件事：这只果蝇已经养了多久（分钟 / 小时 / 天），以及一共长出了多少像素。选择「继续养着」或返回，什么都不变；选择「确认关闭」，两处出生时间一起清掉，下一次打开时从 18 px 重新养起。</p>
+<p>先问一次是有理由的：关一下就丢掉一年的成长，不该一个按键就完成。</p>
+<h2 id="section-6-3">6.3 历史是怎么保住的</h2>
+<p>出生时间是这只果蝇的全部历史，所以存了两份：</p>
+<ol><li>设置里的 <code>pet_born_at</code>；</li><li>应用私有目录里的 <code>files/pet_birth</code>（纯文本，一个毫秒时间戳）。</li></ol>
+<p>启动时两份都读，<strong>取更早的那一个</strong>（多算几天好过丢掉一年）；只要有一份缺失或者两份不一致，立刻把正确值补写回两份。老版本升级上来的用户第一次启动就会把第二份建好。</p>
+<p>两种都空的极端情况下（从还没有这个字段的版本升级、或者数据被外力清过），如果桌宠是开着，就直接把「现在」写成出生时间。这一条是必须的：出生时间为 0 时如果照字面算年龄，会被算成「从 1970 年养到现在」，一上来就是满体型，然后在设置面板里随手动一下又缩回最小——看起来就像历史被偷走了。</p>
+<h2 id="section-6-4">6.4 会丢历史的三种操作</h2>
+<ol><li>在面板里确认关闭桌宠；</li><li>清除应用数据（<code>pm clear</code>），两份副本会一起消失；</li><li>卸载重装（不是覆盖安装）。</li></ol>
+<p>前两种是明确意图或者明确的破坏，第三种属于系统行为。除此之外，覆盖安装新版本不会动这两份数据。</p>
+</section>
+<section class="chapter">
+<h1 id="section-7">七、调试与验证</h1>
+<h2 id="section-7-1">7.1 网页 Demo</h2>
+<p><code>docs/fly-pet-sprite-demo.html</code> 是这套机制的网页镜像，按 C 可以在四种画法之间切换（写实 / 卡通 / 旧像素 / 新分层 PSD），默认是新果蝇。键位：</p>
+<table>
+<thead><tr><th>按键</th><th>作用</th></tr></thead>
+<tbody>
+<tr><td>0</td><td><strong>从第一次开始</strong>：年龄归零，只剩一只 18 px 的小果蝇</td></tr>
+<tr><td>C</td><td>切换画法</td></tr>
+<tr><td>S</td><td>切换体型：按年龄 → 最大 → 最小</td></tr>
+<tr><td>F</td><td>立刻起飞</td></tr>
+<tr><td>B</td><td>立刻仰面</td></tr>
+<tr><td><code>]</code> / <code>[</code></td><td>时间快进 / 回退 30 天</td></tr>
+<tr><td>左键点画面</td><td>让它爬向点击处</td></tr>
+<tr><td>右键</td><td>模拟「关闭桌宠」确认框</td></tr>
+</tbody></table>
+<p>页面打开时默认停在养了 400 天：三只都在，顶部提示条会写清楚「3 只 [180 / 154 / 89]px 年龄 400 天」。</p>
+<h2 id="section-7-2">7.2 设置面板里的调试行</h2>
+<p>只有调试版（<code>BuildConfig.DEBUG</code>）有「体型（调试）」这一行，可选按年龄 / 最小 / 最大，用来当场看两个极端，不必等一年。这一档<strong>不落盘</strong>，重启就回到按年龄，免得哪天忘了自己开过、以为真的养到头了。正式包里这一行根本不存在。</p>
+<h2 id="section-7-3">7.3 在模拟器上把年龄改成任意天</h2>
+<p>模拟器的调试版可以直接改数据。顺序很重要：<strong>先写盘，再 force-stop</strong>——这个应用本身就是桌面，force-stop 之后系统会自己把它拉起来，反过来做就会让它抢在写盘之前读到旧值。</p>
+<pre><code># 先写两份出生时间（单位毫秒），再让它自己重启
+adb -s emulator-5554 push settings_new.xml /data/local/tmp/s.xml
+adb -s emulator-5554 shell run-as app.orchard.tv cp /data/local/tmp/s.xml shared_prefs/settings.xml
+adb -s emulator-5554 shell run-as app.orchard.tv cp /data/local/tmp/pb files/pet_birth
+adb -s emulator-5554 shell am force-stop app.orchard.tv</code></pre>
+<p>仓库里的 <code>docs/_pettest/set_age.sh 400</code> 把这一套包好了，参数是天数。</p>
+<h2 id="section-7-4">7.4 看启动时读到的出生时间</h2>
+<p>每次启动会往 logcat 里写一行，两份副本和实际采用值都列出来：</p>
+<pre><code>adb logcat -s AerialPet
+I AerialPet: pet born: stored=1792466375000 backup=1792466375000 used=1792466375000 mode=pixel</code></pre>
+<h2 id="section-7-5">7.5 实测记录（2026-11-19，模拟器 1920×1080）</h2>
+<table>
+<thead><tr><th>设定年龄</th><th>期望只数</th><th>实测只数</th><th>实测体型</th></tr></thead>
+<tbody>
+<tr><td>30 天</td><td>1</td><td>1</td><td>89 px</td></tr>
+<tr><td>200 天</td><td>2</td><td>2</td><td>153 / 77 px</td></tr>
+<tr><td>400 天</td><td>3</td><td>3</td><td>181 / 159 / 90 px</td></tr>
+</tbody></table>
+<p>（实测值比理论值高约 4%，是复眼光晕抗锯齿把面积算大了，属于测量误差，不是代码偏差。）</p>
+</section>
+<section class="chapter">
+<h1 id="section-8">八、想改什么改哪里</h1>
+<table>
+<thead><tr><th>想改的东西</th><th>改哪个文件</th><th>改哪一行</th></tr></thead>
+<tbody>
+<tr><td>最小 / 最大体型</td><td><code>settings/PetGrowth.kt</code></td><td><code>MIN_PX</code> / <code>MAX_PX</code></td></tr>
+<tr><td>成长快慢（曲线形状）</td><td><code>settings/PetGrowth.kt</code></td><td><code>fraction()</code> 里的 <code>pow(0.35)</code></td></tr>
+<tr><td>满周岁要多久</td><td><code>settings/PetGrowth.kt</code></td><td><code>YEAR_DAYS</code></td></tr>
+<tr><td>第二只、第三只什么时候来</td><td><code>settings/PetGrowth.kt</code></td><td><code>MATE_1_DAYS</code> / <code>MATE_2_DAYS</code></td></tr>
+<tr><td>只数上限</td><td><code>settings/PetGrowth.kt</code></td><td><code>MAX_FLIES</code></td></tr>
+<tr><td>新成员是否也长大</td><td><code>settings/PetGrowth.kt</code></td><td><code>pxOf()</code></td></tr>
+<tr><td>成员之间留多宽</td><td><code>ui/home/PetOverlay.kt</code></td><td><code>separateFlock()</code> 里的 0.55 与 10f</td></tr>
+<tr><td>多久呆一次、多久爬一次</td><td><code>ui/home/PetOverlay.kt</code></td><td><code>step()</code> 里 <code>S_IDLE</code> 分支的 0.30</td></tr>
+<tr><td>爬行 / 飞行速度</td><td><code>ui/home/PetOverlay.kt</code></td><td><code>pace = 170f + …</code> / <code>1000f + …</code></td></tr>
+<tr><td>撞墙翻面有多稀罕</td><td><code>ui/home/PetOverlay.kt</code></td><td><code>aimEdge = Math.random() &lt; 0.03</code></td></tr>
+<tr><td>仰面躺多久、转多久</td><td><code>ui/home/PetOverlay.kt</code></td><td><code>S_BACK</code> / <code>S_SPIN</code> 分支的 0.8–1.7 / 2.6–4.6</td></tr>
+<tr><td>心跳快慢</td><td><code>ui/home/PetOverlay.kt</code></td><td><code>delay(33)</code> 与 <code>dt = 0.033f</code>（两个要一起改）</td></tr>
+<tr><td>提示文案</td><td><code>res/values*/strings.xml</code></td><td><code>st_pet_hint</code> 等</td></tr>
+<tr><td>关闭确认框的文字</td><td><code>ui/wallpaper/WallpaperSheet.kt</code></td><td><code>PetOffPrompt</code></td></tr>
+<tr><td>网页 Demo 同步</td><td><code>docs/fly-pet-sprite-demo.html</code></td><td>顶部 <code>MIN/MAX/MATE1/MATE2</code></td></tr>
+</tbody></table>
+<p>改完记得让三处口径一致：屏幕上的画法、设置面板报的像素数、关闭确认框报的像素数，用的都是 <code>PetGrowth</code> 同一份计算，不要在任何地方另算一遍。</p>
+</section>
+<section class="chapter">
+<h1 id="section-9">九、踩过的坑</h1>
+<ol><li><strong>四根触角</strong>。头部图层本身已经含了两根触角，合成时又把镜像的一半画了一次，于是四根。现在头与腹各合成一次。</li><li><strong>最小体型 11 px、14 px 认不出</strong>。1080p 电视上只剩一团色块，最终定在 18 px。</li><li><strong>46% 的飞行以撞墙结束</strong>。飞行距离拉长之后必然撞墙，翻面成了常态。改成起飞前预演整条航迹、并把距离截在边界前。</li><li><strong>走路像原地狂奔</strong>。步态按帧推进导致步频固定，爬速降下来之后不匹配。改成按地面速度推进。</li><li><strong>时间全花在发呆上</strong>。原本爬完呆 1–30 秒、飞完呆 2–18 秒，实测 65% 的时间在发呆。一度缩到 0.6–2.6 秒 / 0.8–3 秒，发呆降到 56%；the owner 2026-11-19 先改到 0.6–30 秒（实测呆着 90%、爬 8%、飞 1%，几乎一直站着），随后把上限收到 8 秒；现在呆着 74%、爬 21%、飞 2.7%，基本动作重新占回大半。</li><li><strong>放大插值把翅膀弄歪</strong>。翅膀左右落在不同像素网格上，越折越歪。改成放大用最近邻。</li><li><strong>出生时间为 0 被当成 1970 年</strong>。表现为「一上来就是满体型，一碰设置又缩回最小」。现在两份都空时直接种下「现在」。</li><li><strong>升级与备份</strong>。出生时间从只有一份到两份，中间有一版判断写漏了「副本存在但值为 0」的情况，导致升级用户永远建不出副本。现在的判据是「只要和任一份不一致就补写」。</li></ol>
+</section>
+<section class="chapter">
+<h1 id="section-10">附录 A 文件清单</h1>
+<table>
+<thead><tr><th>文件</th><th>作用</th></tr></thead>
+<tbody>
+<tr><td><code>settings/PetGrowth.kt</code></td><td>体型曲线、族群规则，唯一的数值源</td></tr>
+<tr><td><code>settings/AerialSettings.kt</code></td><td>出生时间的两份读写、桌宠开关、调试预览档</td></tr>
+<tr><td><code>ui/home/PetOverlay.kt</code></td><td>状态机、心跳、绘制</td></tr>
+<tr><td><code>ui/wallpaper/WallpaperSheet.kt</code></td><td>设置面板的桌宠行、调试行、关闭确认框</td></tr>
+<tr><td><code>HomeScreen.kt</code></td><td>把 <code>PetOverlay</code> 铺在最上层</td></tr>
+<tr><td><code>res/drawable-nodpi/fly_frame_00..14.png</code></td><td>15 张 64×64 精灵帧</td></tr>
+<tr><td><code>docs/fly-pet-sprite-demo.html</code></td><td>网页镜像，改数值时先在这里看效果</td></tr>
+<tr><td><code>docs/_pettest/set_age.sh</code></td><td>模拟器上把年龄改成任意天数</td></tr>
+<tr><td><code>tools/psd_bake.py</code></td><td>从分层 PSD 烘出精灵帧</td></tr>
+</tbody></table>
+</section>
+<section class="chapter">
+<h1 id="section-11">附录 B 参数字典</h1>
+<table>
+<thead><tr><th>参数</th><th>默认值</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td><code>MIN_PX</code></td><td>18</td><td>出生体型（px，画布边长）</td></tr>
+<tr><td><code>MAX_PX</code></td><td>180</td><td>满周岁体型，等于 <code>MIN_PX × 10</code></td></tr>
+<tr><td><code>YEAR_DAYS</code></td><td>365</td><td>长到满体型需要的天数</td></tr>
+<tr><td><code>MATE_1_DAYS</code></td><td>180</td><td>第二只出现的天数</td></tr>
+<tr><td><code>MATE_2_DAYS</code></td><td>365</td><td>第三只出现的天数</td></tr>
+<tr><td><code>MAX_FLIES</code></td><td>3</td><td>只数上限</td></tr>
+<tr><td><code>PREVIEW_AUTO/MIN/MAX</code></td><td>0/1/2</td><td>调试预览档位</td></tr>
+<tr><td><code>dt</code></td><td>0.033 秒</td><td>每帧固定步长</td></tr>
+<tr><td><code>S_IDLE..S_SPIN</code></td><td>0..4</td><td>五个行为状态</td></tr>
+<tr><td><code>WALK_FIRST</code> / <code>WALK_COUNT</code></td><td>3 / 8</td><td>步态帧起点与帧数</td></tr>
+<tr><td><code>BACK_FRAME</code></td><td>14</td><td>仰面那一帧</td></tr>
+</tbody></table>
+<hr>
+<p>文档对应的代码状态：2026-11-19，<code>versionCode 136</code> / <code>1.24</code> 之后的一版，包含 10 倍体型、三只族群与出生时间缺失补种。文中标「实测」的数字来自模拟器 AerialTV36（1920×1080），电视实机（MiTV4-ANSM0）结论一致。</p>
+</section>
+</body>
+</html>

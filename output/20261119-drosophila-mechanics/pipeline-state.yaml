@@ -1,0 +1,31 @@
+request_id: 20261119-drosophila-mechanics
+entry_type: full_pipeline
+created_at: "2026-11-19T11:30:00+08:00"
+workspace: "D:/WorkBuddyData/2026-11-12-18-45-54/aerial-tv"
+output_docx_path: "D:/WorkBuddyData/2026-11-12-18-45-54/aerial-tv/docs/数字果蝇机制说明_v4.docx"
+output_docx_user_specified: true
+current_stage: 3
+topic: "数字果蝇机制说明（Android TV 桌宠）"
+stage_1:
+  status: completed
+  agent: doc-writer
+  route_tag: general_writing
+  genre: general
+  expert_used: general-writer
+  output_md: "stage1/final_draft.md"
+stage_2:
+  status: completed
+  agent: doc-formatter
+  entry_type: stage2_flow
+  output_html: "stage2/formatted-数字果蝇机制说明.html"
+stage_3:
+  status: completed
+  output_docx: "docs/数字果蝇机制说明_v4.docx"
+  agent: doc-converter
+  input_format: html
+  skill_used: ["html-to-doc"]
+  present_files_opened: true
+  fallback: false
+  fallback_used: false
+  fallback_reason: null
+consistency_check: passed

@@ -91,6 +91,8 @@
     <string name="wx_snow">Snow</string>
     <string name="wx_thunder">Thunderstorm</string>
     <string name="wp_daily_latest">Daily Photo (Bing)</string>
+    <string name="wp_mine">My Wallpaper</string>
+    <string name="wp_mine_note">Send photos from your phone and this changes to one of yours each day; until then it shows a demo picture.</string>
     <string name="wp_live">Moving aerial films. They play while Home is on the top row (either row in two rows) and stop on the frame showing when you go further down to the apps, which stays as the picture; the next film picks up from there.</string>
     <string name="wp_photos_rotate">My Photos, in Turn</string>
     <string name="wp_daily_note">Bing\'s photo of the day, changing to the new one every day.</string>
@@ -100,9 +102,11 @@
     <string name="st_photo_every_hint">How often Home moves on to the next of your photos.</string>
     <string name="wp_photo_note">Your photo. Scan the code on the right to send more from your phone.</string>
     <string name="wp_screensaver">Screensaver</string>
-    <string name="ss_follow_hint">Not chosen yet, so it follows the wallpaper: aerial films with the aerial wallpaper, photos with a picture, starting from that picture. Choose one to keep it.</string>
+    <string name="ss_follow_hint">Not chosen yet, so it follows the wallpaper: aerial films with the aerial wallpaper, My Wallpaper with itself, the daily photo for the rest. Choose one to keep it.</string>
     <string name="ss_aerial">Aerial</string>
     <string name="ss_photos">Photos</string>
+    <string name="ss_daily">Daily Photo</string>
+    <string name="ss_mine">My Wallpaper</string>
     <string name="ss_clock">Clock</string>
     <string name="wp_phone_title">Set up from a phone or computer</string>
     <string name="wp_phone_body">Scan the code, or open the address below in a computer\'s browser, to send photos and videos, change app icons and set the weather\'s city. It must be on the same network as the TV.</string>
@@ -121,14 +125,32 @@
     <string name="ss_back_off">Does Nothing</string>
     <string name="ss_back_choice_hint">What Back does on the top row of Home: start the screensaver or nothing. Set it to nothing if it gets pressed by accident; the screensaver still starts on its own.</string>
     <string name="ss_quality">Aerial Quality</string>
-    <string name="ss_quality_hint">Auto plays the best this TV can show: 4K Dolby Vision, 4K or 1080p. Over the aerial wallpaper the screensaver goes on in the wallpaper\'s format, without a blink; with 4K Dolby Vision chosen it switches to Dolby Vision, and the TV may go black for a moment. 4K Dolby Vision needs about 25 Mbps; choose 1080p if films often skip.</string>
+    <string name="ss_quality_hint">Auto plays the best this TV can show: 4K Dolby Vision, 4K or 2K. Over the aerial wallpaper the screensaver goes on in the wallpaper\'s format, without a blink; with 4K Dolby Vision chosen it switches to Dolby Vision, and the TV may go black for a moment. 4K Dolby Vision needs about 25 Mbps; choose 2K if films often skip.</string>
     <string name="ss_quality_auto">Auto</string>
-    <string name="ss_quality_hd">1080p</string>
+    <string name="ss_quality_hd">2K</string>
     <string name="ss_quality_uhd">4K</string>
     <string name="ss_quality_dv">4K Dolby Vision</string>
     <string name="ss_aerial_keeps">Drosophila keeps the last %2$d films on the TV (up to %1$s); wallpaper and screensaver play them in turn, with a new one each day. In the screensaver, right brings a new film, left goes back.</string>
     <string name="st_focus_style">Focus Style</string>
     <string name="st_home_layout">Home Screen</string>
+    <string name="st_pet">Desktop Pet</string>
+    <string name="st_pet_hint">A little fly that crawls over the icons and grows a little every day. At six months a second, smaller one appears; at a year it is full size and there are three. Turning it off starts over small next time.</string>
+    <string name="st_pet_off">Off</string>
+    <string name="st_pet_pixel">Pixel Fly</string>
+    <!-- Turning the pet off asks first: the fly being kept is lost (the owner, 2026-11-19). -->
+    <string name="st_pet_off_title">Turn off the digital fly?</string>
+    <!-- Revealed only here: how long it has been raised and how far it has grown. -->
+    <string name="st_pet_off_grown">Your digital fly has been raised for %1$d minutes and grown %2$d pixels.</string>
+    <string name="st_pet_off_grown_h">Your digital fly has been raised for %1$d hours and grown %2$d pixels.</string>
+    <string name="st_pet_off_grown_d">Your digital fly has been raised for %1$d days and grown %2$d pixels.</string>
+    <string name="st_pet_off_warn">Once off, the next one starts over as a tiny fly.</string>
+    <string name="st_pet_off_cancel">Keep it</string>
+    <string name="st_pet_off_confirm">Turn off</string>
+    <!-- The fly's diary (the owner, 2026-11-20): one line under the pet row — how many days it has
+         been raised, the pixels it has grown, and the day another one arrives or arrived. -->
+    <string name="st_pet_diary_one">Day %1$d with this fly, %2$d pixels grown. On %3$s there will be a second one.</string>
+    <string name="st_pet_diary_two">Day %1$d with this fly, %2$d pixels grown. The second one came on %3$s; a third on %4$s.</string>
+    <string name="st_pet_diary_three">Day %1$d with this fly, %2$d pixels grown. The second one came on %3$s, the third on %4$s — all three are here.</string>
     <string name="st_layout">Layout</string>
     <string name="st_clock">Clock Position</string>
     <string name="st_clock_left">Top Left</string>
@@ -155,6 +177,8 @@
     <string name="st_names_all">All Apps</string>
     <string name="st_names_hint">Names under every app, or only under the selected one, as on Apple TV. With every name shown, the top row\'s names sit on its glass plate too.</string>
     <string name="ss_kind">Style</string>
+    <string name="st_screen_frame">Screen frame</string>
+    <string name="st_screen_frame_hint">Rounded black border on Home and every screensaver, kept after a restart.</string>
     <string name="wp_weather_city">Location</string>
     <string name="st_home_standard">Two Rows</string>
     <string name="st_home_one_row">One Row</string>

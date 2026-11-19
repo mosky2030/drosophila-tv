@@ -470,7 +470,8 @@
 ## 环境
 
 - macOS，JDK 17（`/opt/homebrew/opt/openjdk@17`），Android SDK 在 `~/Library/Android/sdk`，Gradle Wrapper 8.14.3，AGP 8.12，Kotlin 2.2.10。
-- **签名**：`local/signing.keystore` 加 `local/signing.properties`，`app/build.gradle.kts` 会优先使用它。电视上的版本都是用这把钥匙签的（SHA-256 `e08962dc…6685`）。没有它也能编译，但会回落到本机的 debug key，装不上电视（签名不一致）。
+- **签名**：**果蝇自己的**钥匙 `local/drosophila-release.jks` 加 `local/signing.properties`，`app/build.gradle.kts` 会优先使用它（证书 `CN=Drosophila`，SHA-256 `94063c0b…8c30`，别名 `drosophila`）。两者都在 `.gitignore` 里、不随源码走，换机器开发要**另路拷贝**，见 [MAC_DEV.md](MAC_DEV.md)。没有它们也能编译，但会回落到本机的 debug key，覆盖不了电视上已装的版本（签名不一致，只能卸载重装 —— 果蝇的出生日期和个性化设置会一起清掉）。
+  - ⚠ 上面这段是**上游 Aerial 时代的记录**（那时用的是 `local/signing.keystore`，SHA-256 `e08962dc…6685`，即 1.66–1.90 那些包）。果蝇 fork 从 versionCode 136 起换成了自己那把钥匙，所以**电视上如果还装着上游签名的版本，第一次装果蝇包要先卸载**（`tools/restore.sh --uninstall`），且卸载会丢一次设置和果蝇历史。
 - **ADB 连电视**需要关闭 Claude Code 的沙箱（局域网访问被拦）。电视第一次连接时要在电视上点「允许 USB 调试」。
 
 ## 日常操作

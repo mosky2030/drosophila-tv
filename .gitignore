@@ -23,3 +23,12 @@ docs/iconstudy/
 
 # Temporary chunks from Wi-Fi adb transfers to the TV.
 chunks/
+
+# docs/ 下的本地草稿：一次性测试截图、烘焙中间产物、旧版备份。这里已经堆了约 1.8 GB，
+# 全部只留在本机，不进仓库（进了之后 clone 一次要传半个 G，谁也不想）。
+# 只放行真正要交接的文档和图纸；已经跟踪的文件（docs/*.md、docs/brand、docs/devices）
+# 不受影响，git 只对「新文件」应用这些规则。
+docs/*
+!docs/*.md
+!docs/brand/
+!docs/devices/

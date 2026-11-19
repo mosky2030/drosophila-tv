@@ -648,9 +648,15 @@ fun AppTile(
                         translationX = push.value.x
                         translationY = push.value.y
                         cameraDistance = 14f * density
-                        // Not through styleAlphaState: the original style keeps its icons at 70–80%,
-                        // so the frame is what has to stay whole and say where the focus is.
-                        alpha = ring * ringIn * opacity()
+                        // Not through styleAlphaState in ordinary use: the original style keeps its
+                        // icons at 70–80%, so the frame is what has to stay whole and say where the
+                        // focus is. While Home fades into a screensaver, though, fold the icon's
+                        // own alpha in gradually — otherwise the bright white ring is the last thing
+                        // left on screen after the icon has gone (the owner, 2026-11-19: 「残留边框
+                        // 最后才淡出」). At opacity 1 this is exactly 1.0; at 0 it is 0.
+                        val tileAlpha = opacity()
+                        val iconAlpha = styleAlphaState.value
+                        alpha = ring * ringIn * tileAlpha * (iconAlpha + (1f - iconAlpha) * tileAlpha)
                         // No offscreen buffer while fading: it would be only tile-sized and clip the
                         // frame down to the four corner arcs that reach inside the tile's bounds.
                         compositingStrategy = CompositingStrategy.ModulateAlpha
@@ -700,8 +706,13 @@ fun AppTile(
                         translationY = push.value.y
                         cameraDistance = 14f * density
                         // Not through the icon's alpha where that is dimmed (translucent, wheel):
-                        // the edge is what says where the focus is, so it stays whole.
-                        alpha = if (solidEdge) ringIn else ring * ringIn * opacity()
+                        // the edge is what says where the focus is, so it stays whole — until Home
+                        // fades into a screensaver. There it must go with the icon, not linger as
+                        // the last bright outline on the picture (same fix as the frame above).
+                        val tileAlpha = opacity()
+                        val iconAlpha = styleAlphaState.value
+                        val fadeWithIcon = tileAlpha * (iconAlpha + (1f - iconAlpha) * tileAlpha)
+                        alpha = if (solidEdge) ringIn * fadeWithIcon else ring * ringIn * fadeWithIcon
                         compositingStrategy = CompositingStrategy.ModulateAlpha
                     },
             ) {
